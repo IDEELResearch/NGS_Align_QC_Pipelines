@@ -11,6 +11,7 @@
 
 
 ####### Working Directory and Project Specifics ############
+workdir: '/proj/ideel/YOURDIRECTORY'
 WRKDIR = '/proj/ideel/YOURDIRECTORY'
 readWD = '/proj/ideel/YOURDIRECTORY'
 FQS, = glob_wildcards(WRKDIR + 'symlinks/{fq}.fastq.gz')
