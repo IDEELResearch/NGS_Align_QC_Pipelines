@@ -8,6 +8,7 @@
 
 
 ####### Working Directory and Project Specifics ############
+workdir: '/pine/'
 WRKDIR = '/pine/'
 readWD = '/proj/ideel/YOURDIRECTORY'
 SAMPS, = glob_wildcards(WRKDIR + 'symlinks/{samp}_R1.fastq.gz')
