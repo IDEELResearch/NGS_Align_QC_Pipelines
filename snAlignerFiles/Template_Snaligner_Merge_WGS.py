@@ -113,9 +113,10 @@ rule sort_bam:
 
 
 rule fastq_to_bam:
-	input: 'symlinks/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz'
+	input: R1='/yourpath/symlinks/{samp}_R1.fastq.gz', R2='/yourpath/symlinks/{samp}_R2.fastq.gz'
+#	input: R1='/yourpath/symlinks/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz', R2='/yourpath/symlinks/{samp}_R2.PAIREDtrimmomatictrimmed.fastq.gz'
 	output: 'aln/{samp}.raw.bam'
-	shell: 'bwa mem {REF} {input[0]} \
+	shell: 'bwa mem {REF} {input.R1} {input.R2} \
 		-R "@RG\tID:bwa\tPL:illumina\tLB:{wildcards.samp}_lib\tSM:{wildcards.samp[0]}{wildcards.samp[1]}{wildcards.samp[2]}{wildcards.samp[3]}{wildcards.samp[4]}" \
 		 | samtools view -Sb - > {output}'
 		# calling the @RG ID: 'bwa' because this resolves a clash with @PG ID --> I updated this recently to make it more unique for MERGING
