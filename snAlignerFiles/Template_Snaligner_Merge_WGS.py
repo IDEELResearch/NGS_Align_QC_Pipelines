@@ -10,7 +10,6 @@
 
 
 ####### Working Directory and Project Specifics ############
-####### Working Directory and Project Specifics ############
 workdir: '/pine/'
 WRKDIR = '/pine/'
 readWD = '/proj/ideel/YOURDIRECTORY'
@@ -24,10 +23,8 @@ REF = '/your/reffasta'
 GFF = '/your/refgff'
 
 ######## Tools to Call #########
-######## Always on #########
-PICARD = '/proj/ideel/apps/brew/share/java/picard.jar'
-GATK = '/proj/ideel/apps/brew/share/java/GenomeAnalysisTK.jar'
-FLASH = '/proj/ideel/apps/brew/Cellar/flash/1.2.11/bin/flash'
+PICARD = '/proj/ideel/apps/linuxbrew/Cellar/picard-tools/2.18.4/bin/picard'
+GATK = '/nas/longleaf/apps/gatk/3.8-0/GenomeAnalysisTK.jar'
 TRIMMOMATIC = '/proj/ideel/apps/brew/share/java/trimmomatic-0.36.jar'
 TMPDIR = '/pine/scr/n/f/nfb/PicardandGATKscratch'
 
@@ -38,16 +35,13 @@ TMPDIR = '/pine/scr/n/f/nfb/PicardandGATKscratch'
 ############################
 #Rule all checks to see if file is the same and follows directions up to specified point
 rule all:
-#   input: expand('symlinks/pairedfastqs/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz',  samp = SAMPLES) 
+#	input: expand('symlinks/pairedfastqs/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz',  samp = SAMPLES) 
 #	input: expand('aln/{samp}.matefixed.bam', samp = SAMPLES) 
-   input: 'aln/CmdlineMerge_cmppnasaln.sh'
+#       input: 'aln/CmdlineMerge_cmppnasaln.sh'
 #	input: 'merge.log.file'                                                 # Run to here and then check file
 #	input: expand('aln/{merge}.realn.bam', merge = MERGEDSAMPS) 
 
 ###############################################################################
-
-
-
 
 ############################
 ######## Alignment #########
