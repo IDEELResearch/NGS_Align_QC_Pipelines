@@ -1,0 +1,146 @@
+---
+title: "Whole Genome Coverage Status"
+author: "Nicholas F. Brazeau"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: vignette
+    toc: true
+    fig_caption: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r imports, echo=F, warning=F, message=F, results='hide'}
+library(tidyverse)
+library(RColorBrewer)
+library(devtools)
+devtools::install_github("nickbrazeau/NFBtools")
+library(NFBtools)
+library(DT)
+
+```
+# Background
+
+
+## Goal 
+**Overall**:  
+**Immediate**: 
+
+
+## Alignmment Summary
+```{r alignsummary, echo=F, warning=F, message=F, results='asis'}
+alignsumfiles <- dir(path= "<alignmentpath from picardtools step in snQCer>", full.names = TRUE)
+
+readalign <- function(path){
+  out <- read_tsv(path,  skip=(grep("CATEGORY", readLines(alignsumfiles[1]))-1))
+  sample <- stringr::str_split_fixed(string=basename(path), pattern="_", n=2)[1]
+  out <- as.data.frame(cbind(sample, out))
+  return(out)
+}
+
+alignsumfiles <- lapply(alignsumfiles, readalign)
+alignsumfiles <- do.call("rbind", alignsumfiles)
+
+DT::datatable(alignsumfiles, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('csv')))
+
+
+```
+
+
+## FlagStats
+```{r flagstat, echo=F, warning=F, message=F, results='asis'}
+flagsumfiles <- dir(path="<alignmentpath from samtools flagstats step in snQCer>", full.names = TRUE)
+
+readflag <- function(path){
+  out <- read_tsv(path, col_names = F)
+  sample <- stringr::str_split_fixed(string=basename(path), pattern="_", n=2)[1]
+  out <- as.data.frame(cbind(sample, out))
+  colnames(out) <- c("sample", "summary_stat")
+  return(out)
+}
+
+flagsumfiles <- lapply(flagsumfiles, readflag)
+flagsumfiles <- do.call("rbind", flagsumfiles)
+
+DT::datatable(flagsumfiles, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('csv')))
+
+
+```
+
+
+## Callable Loci Summary
+Output is based on a mimimum base quality of 20, minimum mapping quality of 10, and a minimum depht of 4 (these are all > criterion).  
+  
+```{r calloci, echo=F, warning=F, message=F, results='asis'}
+calllocisumfiles <- dir(path="<alignmentpath from GATK callable loci step in snQCer>", full.names = TRUE)
+calllocisumfiles <- calllocisumfiles[grepl(pattern = "_summarytable.txt", x = basename(calllocisumfiles))]
+readcallloci <- function(path){
+  out <- read_tsv(path, col_names = T)
+  sample <- stringr::str_split_fixed(string=basename(path), pattern="_", n=2)[1]
+  out <- as.data.frame(cbind(sample, out))
+  return(out)
+}
+
+calllocisumfiles <- lapply(calllocisumfiles, readcallloci)
+calllocisumfiles <- do.call("rbind", calllocisumfiles)
+
+DT::datatable(calllocisumfiles, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('csv')))
+
+
+```
+
+## Genomic Coverage by Sample
+Presented is the overall Genomic Coverage and a Summary Table by Sample. 
+```{r genomcov, echo=F, warning=F, message=F, fig.width=12, fig.height=12, dpi=500}
+
+#------------------------
+# read in
+#------------------------
+bamcovs <- NFBtools::bedtoolsgenomecov2bamCov(gencovdir = "<coverage path from bedtools genomecov step in snQCer>")
+
+#------------------------
+# genomic summary plot
+#------------------------
+genomcovplot <- NFBtools::bamCov2OverallPercCov(bamcovs)
+
+
+#------------------------
+# genomic summary table
+#------------------------
+genomsummarydepth <- do.call("rbind", lapply(bamcovs, function(x){x[["genomsummarydepth"]]}))
+#https://stackoverflow.com/questions/11774703/adding-text-to-a-grid-table-plot/11775211#11775211
+genomtable <- gridExtra::tableGrob(genomsummarydepth, rows = NULL)
+title <- grid::textGrob("Summary of Coverage Depth by Sample", gp=grid::gpar(fontfamily="Arial", fontsize=14, fontface="bold"))
+padding <- unit(5,"mm")
+genomtable <- gtable::gtable_add_rows(
+        genomtable,
+        heights = grid::grobHeight(title) + padding,
+        pos = 0)
+genomtable <- gtable::gtable_add_grob(
+        genomtable,
+        list(title),
+        1, 1, 1, ncol(genomtable))
+
+grobs = list(genomcovplot, genomtable)
+gridExtra::grid.arrange(grobs = grobs, layout_matrix = rbind(c(1),
+                                                             c(1),
+                                                             c(2)
+                                                             )
+                        )
+
+
+
+```
+
+## Sample-Level Genomic Coverage
+```{r smplcov, echo=F, warning=F, message=F, fig.width=18, fig.height=12, results='hide', dpi=500}
+
+
+NFBtools::bamCov2SmplRaster(input = bamcovs)
+
+```
+
+
+
