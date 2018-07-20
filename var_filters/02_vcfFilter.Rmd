@@ -27,7 +27,8 @@ library(tidyverse)
 library(RColorBrewer)
 library(grid)
 library(DT)
-source("00_functions.R")
+devtools::install_github("nickbrazeau/NFBtools")
+library(NFBtools)
 
 ```
 
@@ -55,15 +56,20 @@ The goal of this script is to filter this VCF following [GATK best practices har
 ```{r subset_to_snps, include=F, warning=F, results="hide"}
 vcf <-vcfR::extract.indels(vcf, return.indels = F) # subset to SNPs
 vcf <- vcf[vcfR::is.biallelic(vcf)] # subset to biallelic SNPs
+
+tidyvcf <- vcfR2tidy(vcf)
 ```
 Overall, this VCF contains `r nrow(vcf@gt)` biallelic SNPs across `r (ncol(vcf@gt)-1)` samples.
 
 
 ### Summary Statistics for INFO Field Parameters
 ```{r extract_info_field_df, echo=F, include=T, warning=F, results="asis"}
-infodf <- vcf_info_field_to_tidy(vcf)
+infodf <- tidyvcf$fix
+
 infodf_summary <- infodf %>% 
-  tidyr::gather(key="INFO_field_param", val="val", 2:ncol(infodf)) %>% 
+  select(c(ChromKey, QD, MQ, AF, DP, SOR, FS, MQRankSum, ReadPosRankSum)) %>% 
+  dplyr::mutate_if(is.character, as.numeric) %>% 
+  tidyr::gather(key="INFO_field_param", val="val", 2:ncol(.)) %>%
   dplyr::group_by(INFO_field_param) %>% 
   dplyr::summarise(Loci=n(),
                    Missing = sum(is.na(val))/Loci,
@@ -127,15 +133,14 @@ Overall likelihood that the GT call that was made was correct.
 
 ```{r plot_info_field, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
 
-GQ <- as.data.frame(vcfR::extract.gt(x = vcf, element = "GQ"))
-GQ %>%
-  tidyr::gather(key="smpl", value="GQ", 1:ncol(GQ)) %>%
-  dplyr::mutate(GQ_num = as.numeric(GQ)) %>%
-  ggplot(aes(x=smpl, y=GQ_num)) + 
-  geom_violin(aes(fill=factor(smpl))) +
+formatdf <- tidyvcf$gt
+formatdf %>% 
+  select(ChromKey, Indiv, gt_GQ) %>% 
+  ggplot(aes(x=ChromKey, y=gt_GQ)) + 
+  geom_violin(aes(fill=factor(Indiv))) +
   geom_boxplot(width=0.3) +
   geom_jitter(colour="#bdbdbd", height = 0.01, width = 0.01, size=0.2, alpha=0.1) +
-  facet_wrap(~smpl, scales = "free") +
+  facet_wrap(~Indiv, scales = "free") +
   ggtitle("Distribution of GQ Format Parameter") + 
   xlab("Sample") + ylab("GQ Values") + 
   theme(panel.grid.major = element_blank(), 
@@ -172,82 +177,42 @@ words
 ### Genotype Likelihood
 words
 
-## Apply Filters
+## Apply Filters on Info Column
 Applying these filters in R and will revisit VCF. 
-```{r plot_info_field, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
-filtered_vcf <- vcffilter(vcffile = vcffile, 
-                      formatGQ=NULL, 
-                      infoMQ=50,
-                      infoQD=25,
-                      infoSOR=3,
-                      infoAF = NULL,
-                      infoDP = 0.1, 
-                      prop.loci.missing = 0.05,
-                      biallelic = T,
-                      SNPs = F)
+```{r, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
+filtered_vcf <- NFBtools::vcffilter_info(vcfRobject = NULL,
+                           infoMQ=55,
+                           infoQD=25,
+                           infoSOR=2,
+                           infoAF = 0.05,
+                           infoDP = NULL, # this is a percentile cutoff
+                           infoFS = NULL,
+                           infoMQRankSum = NULL,
+                           infoReadPosRankSum = NULL,
+                           biallelic = TRUE,
+                           SNPs = FALSE)
+```
+
+## Apply Filters on Format Column
+Applying these filters in R and will revisit VCF. 
+```{r, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
+filtered_vcf <- NFBtools::vcffilter_format(vcfRobject = NULL,
+                             formatGQ=NULL,
+                             formatDP = NULL,
+                             formatSP = NULL,
+                             prop.loci.missing = 0.5, # this is given a loci, how many samples can have missing information before it is dropped
+                             biallelic = TRUE,
+                             SNPs = FALSE)
+```
+
+## Apply Filters on Segregating Sties
+Applying these filters in R and will revisit VCF. 
+```{r, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
+filtered_vcf <- NFBtools::vcfR2segsites(vcfRobj = NULL, err = 0.025)
 ```
 _**This is the post-filtering VCF parameters:**_
 filtered_vcf
 
-```{r plot_info_field, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
-filtered_infodf <- vcf_info_field_to_tidy(filtered_vcf)
-
-
-filtered_plotObjAllInfo <- filtered_infodf %>% 
-  tidyr::gather(key="INFO_field_param", val="val", 2:ncol(filtered_infodf)) %>%
-  ggplot(aes(x=INFO_field_param, y=val)) + 
-  geom_violin(aes(fill=factor(INFO_field_param))) +
-  geom_boxplot(width=0.3) +
-  geom_jitter(colour="#bdbdbd", height = 0.01, width = 0.01, size=0.2, alpha=0.1) +
-  facet_wrap(~INFO_field_param, scales = "free") +
-  ggtitle("Distribution of INFO Field Parameters Post-Filtering") + 
-  xlab("INFO Field Parameters") + ylab("Values") + 
-  theme(panel.grid.major = element_blank(), 
-        panel.grid.minor = element_blank(), 
-        panel.background = element_blank(),
-        panel.border = element_rect(color = "black", fill = NA, size = 0.5), 
-        plot.title =  element_text(size=14, family = "Arial", face="bold", hjust=0.5, vjust=0.5),
-        axis.ticks = element_blank(),
-        axis.text.y = element_text(size=9, family = "Arial",  face="bold"),
-        axis.title.y = element_text(size=13, family = "Arial", face="bold"),
-        axis.text.x = element_blank(),
-        axis.title.x = element_text(size=13, family = "Arial", face="bold"),
-        strip.text.x = element_text(size =12, face="bold", family = "Arial"),
-        legend.position = "none"
-  )
-
-
-plot(filtered_plotObjAllInfo)
-
-
-filtered_GQ <- as.data.frame(vcfR::extract.gt(x = filtered_vcf, element = "GQ"))
-filtered_GQ %>%
-  tidyr::gather(key="smpl", value="GQ", 1:ncol(GQ)) %>%
-  dplyr::mutate(GQ_num = as.numeric(GQ)) %>%
-  ggplot(aes(x=smpl, y=GQ_num)) + 
-  geom_violin(aes(fill=factor(smpl))) +
-  geom_boxplot(width=0.3) +
-  geom_jitter(colour="#bdbdbd", height = 0.01, width = 0.01, size=0.2, alpha=0.1) +
-  facet_wrap(~smpl, scales = "free") +
-  ggtitle("Distribution of GQ Format Parameter") + 
-  xlab("Sample") + ylab("GQ Values") + 
-  theme(panel.grid.major = element_blank(), 
-        panel.grid.minor = element_blank(), 
-        panel.background = element_blank(),
-        panel.border = element_rect(color = "black", fill = NA, size = 0.5), 
-        plot.title =  element_text(size=14, family = "Arial", face="bold", hjust=0.5, vjust=0.5),
-        axis.ticks = element_blank(),
-        axis.text.y = element_text(size=9, family = "Arial",  face="bold"),
-        axis.title.y = element_text(size=13, family = "Arial", face="bold"),
-        axis.text.x = element_blank(),
-        axis.title.x = element_text(size=13, family = "Arial", face="bold"),
-        strip.text.x = element_text(size =12, face="bold", family = "Arial"),
-        legend.position = "none"
-  )
-
-
-
-```
 
 
 ## IGV Exploration
