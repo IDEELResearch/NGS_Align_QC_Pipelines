@@ -1,0 +1,70 @@
+---
+title: "vcfFilter for GATK UG Hard Filtering"
+author: "Christian Parobek & Nick Brazeau"
+date: "r Sys.time()"
+output:
+  html_document:
+    fig_height: 4
+    fig_width: 4
+    keep_md: yes
+  pdf_document: default
+---
+
+Goal of script is to filter our VCF SNPs in accordance with [GATK best practices hard filtering](http://gatkforums.broadinstitute.org/gatk/discussion/2806/howto-apply-hard-filters-to-a-call-set). This script will plot Allele Frequency, Quality by Depth, Fisher Score, RMS Map Quality, MQ Rank Sum, Read Position Rank Sum, and overall quality (QUAL) for the SNPs observed in a VCF. Finally, at the bottom, it will determine the average depth over all within-exon SNPs and all outside-exon SNPs and plot SNP read-depth distributions by within-exon status.
+
+
+
+```{r, echo=FALSE}
+# Read in the VCF file
+#echo "Read in 27.realn.matefixed_UG.qual.vcf, NOTE: Qual file has filtered & passed SNPs"
+vcf <- read.table("~/Desktop/SNP_INDEL_Pf3D7_02_v3.combined.filtered.vcf", comment.char = "#") #qual.vcf
+# Load the library I need for the regexs I'll use
+library(stringr)
+```
+
+
+####Quality Measure Score Distributions (and allele frequency) for All SNPs:
+
+```{r, echo=FALSE}
+
+AF <- str_extract(vcf$V8, "AF=[0123456789.-]+")
+AFnum <- as.numeric(str_extract(AF, "[0123456789.-]+"))
+plot(sort(AFnum, decreasing=FALSE), xlab="", ylab="Allele Frequency (AF)")
+QD <- str_extract(vcf$V8, "QD=[0123456789.-]+")
+QDnum <- as.numeric(str_extract(QD, "[0123456789.-]+"))
+plot(sort(QDnum, decreasing=FALSE), xlab="", ylab="Quality by Depth (QD)")
+FS <- str_extract(vcf$V8, "FS=[0123456789.-]+")
+FSnum <- as.numeric(str_extract(FS, "[0123456789.-]+"))
+plot(sort(FSnum, decreasing=FALSE), xlab="", ylab="Fisher Score (FS)")
+MQ <- str_extract(vcf$V8, "MQ=[0123456789.-]+")
+MQnum <- as.numeric(str_extract(MQ, "[0123456789.-]+"))
+plot(sort(MQnum, decreasing=FALSE), xlab="", ylab=" RMS Mapping Quality (MQ)")
+MQRankSum <- str_extract(vcf$V8, "MQRankSum=[0123456789.-]+")
+MQRankSumnum <- as.numeric(str_extract(MQRankSum, "[0123456789.-]+"))
+plot(sort(MQRankSumnum, decreasing=FALSE), xlab="", ylab="MQ Rank Sum")
+ReadPosRankSum <- str_extract(vcf$V8, "ReadPosRankSum=[0123456789.-]+")
+ReadPosRankSumnum <- as.numeric(str_extract(ReadPosRankSum, "[0123456789.-]+"))
+plot(sort(ReadPosRankSumnum, decreasing=FALSE), xlab="", ylab="Read Position Rank Sum")
+DP <- str_extract(vcf$V8, "DP=[0123456789.-]+")
+DPnum <- as.numeric(str_extract(DP, "[0123456789.-]+"))
+plot(sort(DPnum, decreasing=FALSE), xlab="", ylab="Allele Depth (DP)")
+```
+  
+-------------
+_Allele Depth Cutoffs (DP)_
+10th and 90th Percentile DP
+The 90th Percentile of the Allele Depth (DP) is `r quantile(DPnum, c(.9))`
+The 10th Percentile of the Allele Depth (DP) is `r quantile(DPnum, c(.1))`
+-----------------
+
+####Detailed Description of Quality Filters from GATK 
+
+_QD - This is the variant confidence (from the `QUAL` field) divided by the unfiltered depth of non-reference samples. --GATK Documentation_
+
+_FS - Phred-scaled p-value using Fisher’s Exact Test to detect strand bias (the variation being seen on only the forward or only the reverse strand) in the reads. More bias is indicative of false positive calls. --GATK Documentation_
+
+_MQ - Root mean square mapping quality provides an estimation of the overall mapping quality of reads supporting a variant call, averaged over all samples in a cohort. The root mean square is equivalent to the mean of the mapping qualities plus the standard deviation of the mapping qualities. --GATK Documentation_
+
+_Rank-Sum Mapping Quality - This is the u-based z-approximation from the Mann-Whitney Rank Sum Test for mapping qualities (reads with ref bases vs. those with the alternate allele). Note that the mapping quality rank sum test can not be calculated for sites without a mixture of reads showing both the reference and alternate alleles, i.e. this will only be applied to heterozygous calls. --GATK DOcumentation_
+
+_This is the u-based z-approximation from the Mann-Whitney Rank Sum Test for the distance from the end of the read for reads with the alternate allele. If the alternate allele is only seen near the ends of reads, this is indicative of error. Note that the read position rank sum test can not be calculated for sites without a mixture of reads showing both the reference and alternate alleles, i.e. this will only be applied to heterozygous calls. --GATK Documentation_
