@@ -131,7 +131,7 @@ plot(plotObjAllInfo)
 ### Distributions of GQ Format Field Parameter
 Overall likelihood that the GT call that was made was correct. 
 
-```{r plot_info_field, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
+```{r plot_format_field, echo=F, include=T, warning=F, fig.width=11, fig.height=8}
 
 formatdf <- tidyvcf$gt
 formatdf %>% 

@@ -1,13 +1,12 @@
 
 ###############################################################################
 # Purpose:  SnakeMake File TEMPLATE to check for Coverage and QC on the Bam files
-# Authors: Nick Brazeau  & Dayne Filer   & Christian Parobek                                               
+# Authors: Nick Brazeau  & Dayne Filer   & Christian Parobek
 #Given: Realn.Bam
-#Return: coverage, qc       
-#Remarks: As before, you will need to change your paths 
-#      	  There is a clash issue with snakemake using python 3 and multiqc python 2. Need to run from command line      
-#		  Note, the heatmap coverage plot and the bed map plot are not very generalizable and need to be updated. Don't use...depreciated and not up to date at this time   
-###############################################################################
+#Return: coverage, qc
+#Remarks: As before, you will need to change your paths
+#Remarks: PLEASE RUN ALL OF THESE STEPS IN YOUR SCRATCH SPACE (except the final report)
+################################################################################
 
 
 ####### Working Directory and Project Specifics ############
@@ -23,11 +22,11 @@ GFF = '/your/refgff'
 
 ######## Tools to Call #########
 ######## Always on #########
-PICARD = '/proj/ideel/apps/brew/share/java/picard.jar'
-GATK = '/proj/ideel/apps/brew/share/java/GenomeAnalysisTK.jar'
-FLASH = '/proj/ideel/apps/brew/Cellar/flash/1.2.11/bin/flash'
+PICARD = '/proj/ideel/apps/linuxbrew/Cellar/picard-tools/2.18.4/bin/picard'
+GATK = '/nas/longleaf/apps/gatk/3.8-0/GenomeAnalysisTK.jar'
 TRIMMOMATIC = '/proj/ideel/apps/brew/share/java/trimmomatic-0.36.jar'
-TMPDIR = '/pine/scr/n/f/nfb/PicardandGATKscratch'
+JAVA = '/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.171-8.b10.el7_5.x86_64/jre/bin/java'
+TMPDIR = '/pine/scr/o/n/onyen/'
 
 
 ##########################################################################################
@@ -43,11 +42,33 @@ rule all:
 #	input: expand('SumSTATsandQC/AlignSummary/{sample}.AlignSummary.Metrics', sample = SAMPLES)
 #	input: expand('SumSTATsandQC/FlagStats/{sample}.samtools.flagstats', sample = SAMPLES)
 #	input: expand('SumSTATsandQC/coverage/data/{sample}.cov', sample = SAMPLES)
-#	input: 'SumSTATsandQC/coverage/{params.prefix}cov_heatmap.pdf'
-#   input: expand('SumSTATsandQC/CallableLoci/{sample}_callable_status.bed', sample = SAMPLES)
+# 	input: expand('SumSTATsandQC/coverage/data/{sample}.long.cov', sample=SAMPLES)
+#	input: 'report.txt'
 ###############################################################################
 
 
+######################################
+######   Pull it all together   ######
+#####################################
+rule render_rmarkdown:
+	output: 'report.txt'
+	shell: 'rmarkdown::render("SumSTATsandQC/WGS_coverage.Rmd", clean=TRUE, output_format="html_document"); echo "Report finished" > {output}'
+# IMPORTANT -- this step requires you to downloada  WGS_Coverage_template.Rmd file and put your appropriate paths in it
+# You should also add in your project details!! (highly recommended)
+# It can live wherever you want/wherever your project is... i.e. maybe the report lives in your analysis directory and not your scratch space
+
+
+######################################
+########   Coverage Calc   #########
+#####################################
+rule calculate_cov:
+	input:	'aln/{sample}.realn.bam'
+	output:	'SumSTATsandQC/coverage/data/{sample}.long.cov'
+	shell:	'bedtools genomecov \
+		-ibam {input} -d  \
+		> {output}'
+
+# note you can use | grep "chromosome names" if you have a lot of contigs that you don't care about
 
 ######################################
 ########   Quality Control   #########
@@ -65,56 +86,30 @@ rule CallableLoci_By_SAMPLE:
 		-summary {output.summarytable} \
 		-o {output.bedfile}'
 
-rule plot_coverage:
-	input:	expand('SumSTATsandQC/coverage/data/{sample}.cov', sample = SAMPLES)
-	params:	idir = 'SumSTATsandQC/coverage/data/', 
-		prefix = '1877_Plasmepsin_', 
-		odir = 'SumSTATsandQC/coverage/'
-	output:	'SumSTATsandQC/coverage/{params.prefix}cov_plot.pdf', 
-		'SumSTATsandQC/coverage/{params.prefix}cov_heatmap.pdf'
-	shell:	'covPlotter -I {params.idir} -O {params.odir} -F {params.prefix}'
-
-
-rule calculate_cov_forheatmap:
-	input:	'aln/{sample}.recal.realn.bam'
-	output:	'SumSTATsandQC/coverage/data/{sample}.cov'
-	shell:	'bedtools genomecov \
-		-ibam {input} -g {GFF} -max 500 | grep "genome\|PFC10_API\|M76\|Pf3" \
-		> {output}'
-# Note for Pv switch out to: -ibam {input} -g {GFF} -max 500 | grep "genome\|chr\|NC_" \
-	
 rule summary_stats:
 	input: 'aln/{sample}.recal.realn.bam'
 	output: 'SumSTATsandQC/FlagStats/{sample}.samtools.flagstats'
 	shell: 'samtools flagstat {input} > {output}'
 # Provides alignment information
-		
+
 rule AlignSummaryMetrics:
 	input: 'aln/{sample}.recal.realn.bam'
 	output: 'SumSTATsandQC/AlignSummary/{sample}.AlignSummary.Metrics'
-	shell: 'java -jar {PICARD} CollectAlignmentSummaryMetrics \
+	shell: '{JAVA} -jar {PICARD} CollectAlignmentSummaryMetrics \
           R={REF} \
           I={input} \
           O={output}'
-# Need this for read length averages, etc. 
+# Need this for read length averages, etc.
 
-###############################################
-########   VALIDATE SAM FILE MODULE   #########
-###############################################
 rule ValidateSamFile:
 	input:'aln/{sample}.realn.bam'
 	output: 'SumSTATsandQC/ValidateBAM/{sample}.validatebams.txt'
-	shell: 'java -jar {PICARD} ValidateSamFile \
+	shell: '{JAVA} -jar {PICARD} ValidateSamFile \
 	    MODE=SUMMARY \
 		I={input} > {output}'
-	# After this step you should run from the command line `cat 'SumSTATsandQC/ValidateBams.tab.txt | grep "ERROR"` -- if there are errors, STOP and figure out why	
-		
-######################################
-########   FASTQC MODULE   #########
-#####################################
+	# After this step you should run from the command line `cat 'SumSTATsandQC/ValidateBams.tab.txt | grep "ERROR"` -- if there are errors, STOP and figure out why
+
 rule fastqc:
 	input: expand('symlinks/{fq}.fastq.qz', fq=FQS)
 	output: outdir='symlinks/FASTQC/', log='symlinks/FASTQC/Log.txt',
 	shell: 'fastqc {input} --outdir {output.outdir}; echo "Fastqc succesfully completed" > {output.log} '
-
-	
