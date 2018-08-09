@@ -1,0 +1,15 @@
+# configuration for alignment pipeline
+reference: /proj/ideel/julianog/users/apm/genomes/pf_3d7/pf_3d7.fa
+
+adapters: /nas02/apps/trimmomatic-0.36/Trimmomatic-0.36/adapters/TruSeq3-PE.fa
+min_trimmed_length: 30
+
+logs: jobs
+tmpdir: .tmp
+readbuffer: 1000000
+threads: 6
+memory: 12
+
+runs: pf3k_asia_run_map.txt
+aligned: aln
+fastq: fastq

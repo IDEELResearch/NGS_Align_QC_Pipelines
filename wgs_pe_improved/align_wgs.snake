@@ -1,0 +1,129 @@
+#! /usr/bin/env python
+"""
+align_wgs.snake
+New and slightly improved alignment pipeline implementing current best practices for bwa-mem
+"""
+
+from __future__ import print_function
+
+import os
+import sys
+import yaml
+import re
+from collections import defaultdict
+
+def load_run_metadata(f):
+	""" Get run metadata from tab-separated file."""
+	libs = defaultdict(dict)
+	samples = set()
+	with open(f) as rfile:
+		for line in rfile:
+			if line.startswith("#"):
+				continue
+			pieces = line.strip().split()
+			sample, run = pieces[:2]
+			library = str(sample)
+			#if len(pieces) > 2:
+			#	run = pieces[3]
+			samples.add(sample)
+			libs[run] = ( re.sub(r"[^A-Za-z0-9]", ".", library), sample)
+
+	return libs, list(samples)
+
+def make_rg_tag(iid, sm, lib, pl = "illumina"):
+	tag = r"@RG\tLB:{}\tID:{}\tSM:{}\tPL:{}".format(lib,iid,sm,pl)
+	return tag
+
+## read project-specific configuration options
+#config = yaml.load(open("config.yaml"))
+REF = os.path.expandvars(config["reference"])
+ADAPTERS = os.path.expandvars(config["adapters"])
+SEQROOT = config["fastq"]
+ALNROOT = config["aligned"]
+TMP_DIR = config["tmpdir"]
+MAX_RECORDS_IN_RAM = config["readbuffer"]
+LOGROOT = config["logs"]
+
+## global software configuration; probably won't change much
+PICARD = "/nas02/apps/picard-2.10.3/picard-2.10.3/picard.jar"
+
+## read run manifest, assigning runs to samples
+runs, samples = load_run_metadata(config["runs"])
+
+## make targets
+lane_bams = defaultdict(list)
+for rg,(lib, sample) in runs.items():
+	lane_bams[sample].append( os.path.join(ALNROOT, "lanes_raw", "{}/{}.aligned.bam".format(sample, rg)) )
+final_target = [ os.path.join(ALNROOT, "merged", "{}.bam.bai".format(s)) for s in samples ]
+
+rule all:
+	input: final_target
+
+rule index_merged:
+	input:
+		"{alnroot}/merged/{sample}.bam"
+	output:
+		"{alnroot}/merged/{sample}.bam.bai"
+	params:
+		memory = str(6),
+		threads =  str( int(config["threads"]) - 1 )
+	shell:
+		r"""
+		java -jar -Xmx4g -XX:ParallelGCThreads={params.threads} {PICARD} BuildBamIndex \
+			INPUT={input} \
+			OUTPUT={output} \
+			TMP_DIR={TMP_DIR} \
+			VALIDATION_STRINGENCY=LENIENT
+		"""
+
+rule merge_lanes:
+	input:
+		lambda wildcards: lane_bams[wildcards.sample]
+	output:
+		"{alnroot}/merged/{sample}.bam"
+	params:
+		memory = str(8),
+		threads = str( int(config["threads"]) - 1 )
+	run:
+		inbams = " ".join([ "INPUT="+x for x in lane_bams[wildcards.sample] ])
+		cmd = "java -jar -Xmx8g -XX:-UseGCOverheadLimit -XX:ParallelGCThreads={params.threads} {PICARD} MergeSamFiles " + \
+			"SORT_ORDER=coordinate {inbams} OUTPUT={output} " + \
+			"TMP_DIR={TMP_DIR} MAX_RECORDS_IN_RAM={MAX_RECORDS_IN_RAM}"
+		shell(cmd)
+
+# Stream reads through cutadapt and straight to aligner
+# see:
+#	http://cutadapt.readthedocs.io/en/stable/guide.html#removing-adapters
+#	https://support.illumina.com/bulletins/2016/12/what-sequences-do-i-use-for-adapter-trimming.html
+rule trim_and_align:
+	input:
+		ref = REF,
+		adapters = ADAPTERS,
+		read1 = os.path.join(SEQROOT, "{sample}/{rg}_1.fastq.gz"),
+		read2 = os.path.join(SEQROOT, "{sample}/{rg}_2.fastq.gz")
+	output:
+		aligned = temp( os.path.join(ALNROOT, "lanes_raw/{sample}/{rg}.aligned.bam") ),
+		trimlog = os.path.join(SEQROOT, "{sample}/{rg}_trimming.log")
+		# split = "{alnroot}/lanes_raw/{sample}_{barcode}_{lane}.split.bam",
+		# discordant = "{alnroot}/lanes_raw/{sample}_{barcode}_{lane}.discordant.bam",
+		# unmapped = "{alnroot}/lanes_raw/{sample}_{barcode}_{lane}.unmapped.fastq"
+	params:
+		rg = lambda wildcards: make_rg_tag(wildcards.rg, wildcards.sample, runs[ wildcards.rg ][0]),
+		minlength = config["min_trimmed_length"],
+		threads = config["threads"],
+		memory = config["memory"]
+	shell:
+		r"""
+		cutadapt --interleaved \
+			-a file:{input.adapters} \
+			-A file:{input.adapters} \
+			-m {params.minlength} \
+			{input.read1} {input.read2} \
+			2>{output.trimlog} | \
+		bwa mem -t {params.threads} -YK100000000 \
+			-H '@PG\tID:cutadapt\tCL:cutadapt -a file:{input.adapters} -A file:{input.adapters} -m {params.minlength} --interleaved {input.read1} {input.read2} 2>{output.trimlog}' \
+			-R '{params.rg}' -p \
+			{input.ref} - | \
+		samblaster --addMateTags | \
+		samtools view -bhS - >{output.aligned}
+		"""
