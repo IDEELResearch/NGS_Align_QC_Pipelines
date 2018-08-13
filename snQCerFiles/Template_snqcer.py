@@ -88,13 +88,13 @@ rule CallableLoci_By_SAMPLE:
 		-o {output.bedfile}'
 
 rule summary_stats:
-	input: 'aln/{sample}.recal.realn.bam'
+	input: 'aln/{sample}.realn.bam'
 	output: 'SumSTATsandQC/FlagStats/{sample}.samtools.flagstats'
 	shell: 'samtools flagstat {input} > {output}'
 # Provides alignment information
 
 rule AlignSummaryMetrics:
-	input: 'aln/{sample}.recal.realn.bam'
+	input: 'aln/{sample}.realn.bam'
 	output: 'SumSTATsandQC/AlignSummary/{sample}.AlignSummary.Metrics'
 	shell: '{JAVA} -jar {PICARD} CollectAlignmentSummaryMetrics \
           R={REF} \
