@@ -105,8 +105,8 @@ rule sort_bam:
 
 
 rule fastq_to_bam:
-	input: R1='/yourpath/symlinks/{samp}_R1.fastq.gz', R2='/yourpath/symlinks/{samp}_R2.fastq.gz'
-#	input: R1='/yourpath/symlinks/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz', R2='/yourpath/symlinks/{samp}_R2.PAIREDtrimmomatictrimmed.fastq.gz'
+#	input: R1= readWD + 'symlinks/{samp}_R1.fastq.gz', R2= readWD + 'symlinks/{samp}_R2.fastq.gz'
+	input: R1='symlinks/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz', R2='symlinks/{samp}_R2.PAIREDtrimmomatictrimmed.fastq.gz'
 	output: 'aln/{samp}.raw.bam'
 	shell: 'bwa mem {REF} {input.R1} {input.R2} \
 		-R "@RG\\tID:bwa\\tPL:illumina\\tLB:{wildcards.samp}_lib\\tSM:{wildcards.samp[0]}{wildcards.samp[1]}{wildcards.samp[2]}{wildcards.samp[3]}{wildcards.samp[4]}" \
