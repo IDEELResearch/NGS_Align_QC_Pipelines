@@ -136,7 +136,7 @@ Overall likelihood that the GT call that was made was correct.
 formatdf <- tidyvcf$gt
 formatdf %>% 
   select(ChromKey, Indiv, gt_GQ) %>% 
-  ggplot(aes(x=ChromKey, y=gt_GQ)) + 
+  ggplot(aes(x=Indiv, y=gt_GQ)) + 
   geom_violin(aes(fill=factor(Indiv))) +
   geom_boxplot(width=0.3) +
   geom_jitter(colour="#bdbdbd", height = 0.01, width = 0.01, size=0.2, alpha=0.1) +

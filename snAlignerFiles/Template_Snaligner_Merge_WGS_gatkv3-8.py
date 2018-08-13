@@ -116,8 +116,8 @@ rule fastq_to_bam:
 
 
 rule trim_illumina_Adaptors_fastqs:
-	 input: readWD + 'symlinks/pairedfastqs/{samp}_1.fastq.gz', readWD + 'symlinks/pairedfastqs/{samp}_2.fastq.gz',
-	 output: 'symlinks/pairedfastqs/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz', 'symlinks/pairedfastqs/{samp}_R1.UNPAIREDtrimmomatictrimmed.fastq.gz', 'symlinks/pairedfastqs/{samp}_R2.PAIREDtrimmomatictrimmed.fastq.gz', 'symlinks/pairedfastqs/{samp}_R2.UNPAIREDtrimmomatictrimmed.fastq.gz',
+	 input: readWD + 'symlinks/{samp}_1.fastq.gz', readWD + 'symlinks/{samp}_2.fastq.gz',
+	 output: 'symlinks/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz', 'symlinks/{samp}_R1.UNPAIREDtrimmomatictrimmed.fastq.gz', 'symlinks/{samp}_R2.PAIREDtrimmomatictrimmed.fastq.gz', 'symlinks/{samp}_R2.UNPAIREDtrimmomatictrimmed.fastq.gz',
 	 shell: 'trimmomatic PE -threads 12 -trimlog symlinks/trim_log.txt {input[0]} {input[1]} {output[0]} {output[1]} {output[2]} {output[3]} ILLUMINACLIP:/nas/longleaf/apps/trimmomatic/0.36/Trimmomatic-0.36/adapters/TruSeq3-PE.fa:2:30:10:8:TRUE LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36'
      # The TRUE at the end keeps the paired end reads in R2
      # Want to align the PAIRED trimmed
