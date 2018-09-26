@@ -19,7 +19,7 @@ gencovdirdatapath = "/pine/o/n/onyen/SomFoler/SumSTATsandQC/coverage/data/"
 
 ```
 
-```{r filepaths, echo=F, warning=F, message=F, results='hide'}
+```{r imports, echo=F, warning=F, message=F, results='hide'}
 library(tidyverse)
 library(RColorBrewer)
 library(devtools)
@@ -33,7 +33,7 @@ options(bitmapType='cairo')
 words
 
 ## Goal
-**Overall**: words 
+**Overall**: words
 **Immediate**: words
 
 
@@ -80,7 +80,7 @@ DT::datatable(flagsumfiles, extensions = 'Buttons', options = list(dom = 'Bfrtip
 
 ## Callable Loci Summary
 Output is based on a mimimum base quality of 20, minimum mapping quality of 10, and a minimum depht of 4 (these are all > criterion).  
-  
+
 ```{r calloci, echo=F, warning=F, message=F, results='asis'}
 calllocisumfiles <- dir(path=calllocisumfilepath, full.names = TRUE)
 calllocisumfiles <- calllocisumfiles[grepl(pattern = "_summarytable.txt", x = basename(calllocisumfiles))]
@@ -150,6 +150,3 @@ NFBtools::bamCov2SmplRaster(input = bamcovs)
 ```
 
 **This report was generated using NFBtools by Nick Brazeau (please see github and NFBtools to customize further)**.
-
-
-
