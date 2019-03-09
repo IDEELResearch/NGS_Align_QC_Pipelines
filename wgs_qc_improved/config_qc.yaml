@@ -1,0 +1,13 @@
+# config file for QC pipeline
+reference: /proj/ideel/julianog/users/apm/genomes/pf_3d7/pf_3d7.fa
+runs: run_map.txt
+regions: $PF/all_chroms.named.bed
+aligned: $SCRATCH/cambodia/aln/merged
+min_depth: 4
+max_depth: 250
+min_base_qual: 20
+min_mapping_qual: 10
+threads: 4
+memory: 8
+outdir: $SCRATCH/cambodia/qc
+windows: $PF/all_chroms.w5kb.bed

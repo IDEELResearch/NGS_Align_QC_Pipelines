@@ -1,0 +1,347 @@
+---
+title: "Basic WGS QC report"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: vignette
+    toc: false
+    fig_caption: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(dplyr)
+library(readr)
+library(ggplot2)
+
+myldply <- function(ll, fn, ..., .id = NULL) {
+	
+	rez <- lapply(ll, fn, ...)
+	dplyr::bind_rows(rez, .id = .id)
+	
+}
+
+factor_chrom <- function(x, genome = "Pf3D7", ...) {
+	
+	x <- gsub("^Pf(?:3D7)*_(.+)_.+", "\\1", x, perl = TRUE)
+	x <- gsub("^Pf_(.+)", "\\1", x, perl = TRUE)
+	x <- gsub("^0", "", x)
+	x <- gsub("^A.+", "A", x)
+	x <- gsub("^M.+", "M", x)
+	x <- factor(x, levels = c(1:14, "A", "M"))
+	class(x) <- c(class(x), "chrom")
+	attr(x, "genome") <- genome
+	return(x)
+		
+}
+
+#' Check if chromosome names are in nuclear genome
+is_nuclear <- function(x, ...) {
+	
+	if (!inherits(x, "chrom"))
+		x <- factor_chrom(x)
+	x %in% 1:14
+	
+}
+
+#' Get mode (in statistical sense) of discrete values assumed to be integers
+modal_value <- function(x, ...) {
+	
+	as.numeric(names(rev(sort(table((x)))))[1])
+	
+}
+
+#' Sensible continuous horizontal axis for genomic coordinates
+scale_x_genome <- function(..., scale = 1e3) {
+	
+	scalers <- c("KB" = 1e3, "KBP" = 1e3, "MB" = 1e6, "MBP" = 1e6)
+	m <- match(toupper(scale), names(scalers))
+	if (is.numeric(scale))
+		s <- scale[1]
+	else if (!is.na(m))
+		s <- scalers[m]
+	else
+		s <- 1e3
+	
+	ggplot2::scale_x_continuous(..., labels = function(x) x/s)
+	
+}
+
+#' Generic bare-bones plotting theme for categorical X-axis, adding vertical dotted lines
+theme_vertical_reflines <- function(..., rotate.labels = FALSE) {
+	
+	tt <- theme_classic(...) %+%
+		theme(panel.grid.major.x = element_line(colour = "grey90", linetype = "dotted"))
+	if (rotate.labels)
+		tt <- tt %+% theme(axis.text.x = element_text(angle = 90, hjust = 1),
+					 axis.title.x = element_blank())
+	
+	return(tt)
+	
+}
+
+#' Perform wildcard interpolation in a template string, working row-wise through a tibble
+interp_multiple <- function(s, df, ...) {
+	
+	s <- gsub("\\{", "${", s)
+	sapply(seq_len(nrow(df)), function(ii) stringr::str_interp(s, df[ii,]))
+	
+}
+
+#' Read and process `samtools flagstat` output
+read_flagstat <- function(ff, ...) {
+	
+	fsraw <- readLines(ff)
+	x <- stringr::str_match(fsraw, "(\\d+) \\+ (\\d+) .+$")[,2:3] %>%
+		apply(., 2, as.numeric)
+	y <- x
+	y[1,] <- y[1,]/x[1,]
+	y[4,] <- y[4,]/x[1,] # duplicate as % of total reads
+	y[2,] <- y[2,]/x[5,] # secondary as % of mapped reads
+	y[3,] <- y[3,]/x[5,] # supp as % of mapped reads
+	y[5,] <- y[5,]/x[1,] # mapped as % of total reads
+	y[6,] <- y[6,]/x[1,] # paired as % of total reads
+	y[9,] <- y[9,]/x[5,] # proper_pair as % of mapped reads
+	y[10,] <- y[10,]/x[5,] # both_mapped as % of mapped reads
+	y[11,] <- y[11,]/x[1,] # singleton as % of total reads
+	y[12,] <- y[12,]/x[5,] # mate_diff_chr as % of mapped reads (and below)
+	y[13,] <- y[13,]/x[5,] # (see above)
+	groups <- c("total","secondary","supplementary","duplicate","mapped","paired","R1","R2",
+				"proper_pair","both_mapped","singleton","mate_diff_chr","mate_diff_chr_MQ5")
+	fs <-bind_rows( tibble(count = x[,1], prop = y[,1], group = factor(groups, groups), status = "PASS"),
+					tibble(count = x[,2], prop = y[,2], group = factor(groups, groups), status = "FAIL") )
+	return(fs)
+	
+}
+
+#' Read summary report from GATK CallableLoci
+read_callable_summary <- function(ff, ...) {
+	
+	x <- read.table(ff, stringsAsFactors = FALSE, strip.white = TRUE, header = TRUE)
+	x <- as_tibble(x)
+	x$prop <- x$nBases/sum(x$nBases[ x$state != "REF_N" ])
+	x <- subset(x, state != "REF_N")
+	x$state <- factor(x$state)
+	x$state <- relevel(x$state, "CALLABLE")
+	return(x)
+	
+}
+
+#' Read Picard CollectAllignmengSummaryMetrics result
+read_alignment_summary_metrics <- function(ff, ...) {
+	
+	txtraw <- readLines(ff)
+	fl <- grep("^## METRICS", txtraw)
+	if (!length(fl))
+		stop("Can't find expected header for AlignmentSummaryMetrics output.")
+	
+	read_tsv(ff, skip = fl)
+	
+}
+
+#' Read cumulative distribution of global depth-of-coverage produced by `mosdepth`
+read_mosdepth_coverage_hist <- function(ff, force.chroms = TRUE, ...) {
+	
+	x <- read_tsv(ff, col_names = c("chr","depth","pct"))
+	if (force.chroms)
+		x$chr <- factor_chrom(x$chr)
+	return(x)
+	
+}
+
+
+#' Check result from Picard ValidateSamFile (summary mode)
+check_validation_result <- function(ff, ...) {
+	
+	ll <- readLines(ff)
+	any( grepl("No errors found", ll) )
+	
+}
+
+get_depth_cutoffs <- function(f, cutoffs = c(5,10,20,50), ...) {
+	
+	lapply(cutoffs, function(x) {
+		subset(f, depth <= x) %>%
+			group_by(chr) %>%
+			summarise(pct = min(pct)) %>%
+			mutate(depth = x)
+	}) %>% bind_rows()
+	
+}
+
+get_depth_quantiles <- function(f, ...) {
+	
+	arrange(f, -depth) %>%
+		summarise(med = first(depth[ pct >= 0.5 ]),
+				  uq = first(depth[ pct >= 0.25 ]),
+				  uuq = first(depth[ pct >= 0.05 ]),
+				  lq = first(depth[ pct >= 0.75 ]),
+				  llq = first(depth[ pct >= 0.95 ])
+		)
+	
+}
+
+plot_genome_coverage <- function(df, ...) {
+	
+	binsize <- modal_value(with(df, end-start))
+	
+	ggplot(subset(df, is_nuclear(chr))) +
+		geom_point(aes(x = start, y = depth, colour = depth)) +
+		scale_colour_distiller(limits = c(1,512), palette = "RdYlBu", trans = "log2", direction = 1) +
+		facet_grid(chr ~ .) +
+		scale_x_genome("position (kb)") +
+		scale_y_continuous(limits = c(1,256), breaks = c(8,64), trans = "identity") +
+		theme_classic() +
+		theme(strip.background = element_blank(),
+			  strip.text = element_text(face = "bold")) +
+		ggtitle(paste0("binned coverage\n(modal bin size: ", binsize/1e3," kb)"))
+	
+}
+
+
+plot_sample_coverage_whiskers <- function(df, ...) {
+	
+	group_by(df, iid) %>%
+		get_depth_quantiles() %>%
+		ggplot(aes(x = reorder(iid, med))) +
+		geom_linerange(aes(ymin = llq, ymax = uuq), size = 0.5, colour = "grey50") +
+		geom_linerange(aes(ymin = lq, ymax = uq), size = 1.5, colour = "grey50") +
+		geom_point(aes(y = med), size = 2) +
+		scale_y_continuous("depth", trans = "identity") +
+		theme_vertical_reflines(rotate.labels = TRUE) +
+		ggtitle("per-sample coverage quantiles")
+	
+}
+
+plot_chrom_coverage_whiskers <- function(df, ...) {
+	
+	group_by(df, chr) %>%
+		get_depth_quantiles() %>%
+		ggplot(aes(x = chr)) +
+		geom_linerange(aes(ymin = llq, ymax = uuq), size = 0.5, colour = "grey50") +
+		geom_linerange(aes(ymin = lq, ymax = uq), size = 1.5, colour = "grey50") +
+		geom_point(aes(y = med), size = 2) +
+		scale_x_discrete("chromosome") +
+		scale_y_continuous("depth", trans = "identity") +
+		theme_vertical_reflines(rotate.labels = TRUE) +
+		ggtitle("per-chromosome coverage quantiles")
+	
+}
+
+plot_sample_coverage_cutoffs <- function(df, cutoffs = c(5,10,20,50), ...) {
+	
+	get_depth_cutoffs(df, cutoffs) %>%
+		subset(!is.na(chr)) %>%
+		ggplot() +
+		geom_hline(yintercept = 1.0, lty = "dashed", colour = "grey50") +
+		geom_point(aes(x = chr, y = pct, colour = factor(depth))) +
+		scale_x_discrete("chromosome") +
+		scale_y_continuous("proportion of sites", limits = c(0,1), labels = scales::percent) +
+		scale_colour_brewer("depth\ncutoff", palette = "RdBu", labels = function(f) paste0(f, "X")) +
+		theme_vertical_reflines() +
+		ggtitle("proportion sites above\ncoverage cutoffs")
+	
+}
+```
+
+## Do *.bam files pass validation checks?
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+config <- yaml::yaml.load_file("report.yaml")
+iids <- unique( read.table(config$samples, comment = "#", stringsAsFactors = FALSE)[,1] )
+
+isvalid <- myldply(setNames(iids, iids),
+				   function(f) tibble(is_valid = check_validation_result(file.path(config$where, paste0(f, ".isvalid")))),
+				   .id = "iid")
+```
+Processed **`r length(iids)`** BAM files, of which **`r sum(!isvalid$is_valid, na.rm = TRUE)`** failed basic validation.
+
+Samples that failed (if any) are below:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+if (any(!isvalid$is_valid)) {
+	knitr::kable(subset(isvalid, !is_valid))
+	writeLines(subset(isvalid, !is_valid)$iid, file.path(config$where, "invalid_bams.txt"))
+} else {
+	cat("[No invalid *.bam files]")
+}
+
+```
+
+## What is distribution of global coverage per sample?
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+dphist <- myldply(setNames(iids, iids),
+				  function(f) read_mosdepth_coverage_hist(file.path(config$where, paste0(f, ".mosdepth.global.dist.txt")), FALSE),
+				  .id = "iid")
+
+subset(dphist, chr == "total") %>%
+	plot_sample_coverage_whiskers()
+subset(dphist, chr == "total") %>%
+	group_by(iid) %>%
+	get_depth_quantiles() %>%
+	write_tsv(., file.path(config$where, "all.coverage_quantiles.txt"))
+subset(dphist, chr == "total") %>%
+	group_by(iid) %>%
+	get_depth_cutoffs() %>%
+	write_tsv(., file.path(config$where, "all.coverage_cutoffs.txt"))
+```
+
+## What proportion of loci are "callable" per sample?
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+callable <- myldply(setNames(iids, iids),
+				  function(f) read_callable_summary(file.path(config$where, paste0(f, ".callable_summary.txt"))),
+				  .id = "iid")
+so <- subset(dphist, chr == "total") %>%
+	group_by(iid) %>%
+	get_depth_quantiles() %>%
+	arrange(med)
+so <- so$iid
+
+CUTOFF <- as.numeric(config$callable_cutoff)
+callable$iid <- factor(callable$iid, so)
+ggplot(callable) +
+	geom_bar(aes(x = iid, y = prop, fill = state), stat = "identity",
+			 position = position_fill(reverse = TRUE)) +
+	geom_hline(yintercept = CUTOFF, lty = "dashed", colour = "red") +
+	annotate("text", label = paste0(100*CUTOFF, "%"), x = 0.1, y = CUTOFF + 0.05, colour = "red", hjust = 0) +
+	scale_fill_brewer(palette = "Blues", direction = -1) +
+	scale_y_continuous("proportion of sites", labels = scales::percent) +
+	theme_vertical_reflines(rotate.labels = TRUE)
+
+write_tsv(callable, file.path(config$where, "all.callable_summary.txt"))
+```
+
+## How many reads, and how many aligned?
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+alnsm <- myldply(setNames(iids, iids),
+				 function(f) read_alignment_summary_metrics(file.path(config$where, paste0(f, ".AlignmentSummaryMetrics.txt"))),
+				 .id = "iid")
+DT::datatable(select(alnsm, -SAMPLE, -LIBRARY, -READ_GROUP))
+```
+
+# Plots by sample
+```{r echo=FALSE, message=FALSE, warning=FALSE, results="asis"}
+for (iid in iids) {
+	
+	message(">>>>>>>>>>>>>>>>>>>>>>>>", iid)
+	cat("##", iid)
+	
+	cvg <- read_tsv(file.path(config$where, paste0(iid, ".regions.bed.gz")),
+					col_names = c("chr","start","end","name","depth"))
+	cvg$chr <- factor_chrom(cvg$chr)
+	dphist <- read_mosdepth_coverage_hist(file.path(config$where, paste0(iid, ".mosdepth.global.dist.txt")))
+	dphist <- subset(dphist, is_nuclear(chr))
+	
+	p1 <- plot_genome_coverage(cvg)
+	p2 <- plot_sample_coverage_cutoffs(dphist)
+	p3 <- plot_chrom_coverage_whiskers(dphist)
+	
+	p <- cowplot::plot_grid(p1, cowplot::plot_grid(p2, p3, nrow = 2, ncol = 1), ncol = 2)
+	print(p)
+	
+	cat("\n")
+	
+}
+```

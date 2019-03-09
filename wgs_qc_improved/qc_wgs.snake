@@ -1,0 +1,234 @@
+#! /usr/bin/env python
+"""
+qc_wgs.snake
+Run a variety of QC tools on WGS data. Parallelize over chromosomes only if requested.
+"""
+
+from __future__ import print_function
+
+import os
+import sys
+import yaml
+import re
+from collections import defaultdict, OrderedDict
+from pybedtools import BedTool
+
+def load_run_metadata(f):
+	""" Get run metadata from tab-separated file."""
+	libs = defaultdict(dict)
+	samples = set()
+	with open(f) as rfile:
+		for line in rfile:
+			if line.startswith("#"):
+				continue
+			pieces = line.strip().split()
+			sample, run = pieces[:2]
+			library = str(sample)
+			#if len(pieces) > 2:
+			#	run = pieces[3]
+			samples.add(sample)
+			libs[run] = ( re.sub(r"[^A-Za-z0-9]", ".", library), sample)
+
+	return libs, list(samples)
+
+def load_regions(rfile):
+	""" Open a *.bed file of regions to analyze. Regions with same value in 'name' column will be grouped. """
+	regions = BedTool(rfile)
+	chunks = OrderedDict()
+	for r in regions:
+		rname = "all"
+		if r.name and rname != ".":
+			rname = r.name
+		if not rname in chunks:
+			chunks[rname] = []
+		chunks[rname].append((r.chrom, r.start, r.end, rname))
+	return chunks
+
+def read_callable_summary(f):
+	result = OrderedDict()
+	with open(f, "r") as infile:
+		_ = next(infile) # strip header line
+		for line in infile:
+			key, val = line.strip().split()
+			result[key] = int(val)
+	return result
+
+## read project-specific configuration options
+#config = yaml.load(open("config.yaml"))
+REF = os.path.expandvars(config["reference"])
+#ADAPTERS = os.path.expandvars(config["adapters"])
+#SEQROOT = config["fastq"]
+ALNROOT = os.path.expandvars(config["aligned"])
+REGIONS = os.path.expandvars(config["regions"])
+OUTDIR = os.path.expandvars(config["outdir"]) if "outdir" in config else "."
+#TMP_DIR = config["tmpdir"]
+#MAX_RECORDS_IN_RAM = config["readbuffer"]
+#LOGROOT = config["logs"]
+
+## global software configuration; probably won't change much
+PICARD = "/nas02/apps/picard-2.10.3/picard-2.10.3/picard.jar"
+GATK = "/nas/longleaf/apps/gatk/3.8-0/GenomeAnalysisTK.jar" # CallabeLoci not yet ported to version 4
+
+## read run manifest, assigning runs to samples
+runs, samples = load_run_metadata(os.path.expandvars(config["runs"]))
+
+## read regions list
+chunks = load_regions(REGIONS)
+
+## make final targets
+targets = {
+	"AlignmentSummaryMetrics": expand(os.path.join(OUTDIR, "{sample}.AlignmentSummaryMetrics.txt"), sample = samples),
+	"flagstats": expand(os.path.join(OUTDIR, "{sample}.flagstats"), sample = samples),
+	"ValidateSamFile": expand(os.path.join(OUTDIR, "{sample}.isvalid"), sample = samples),
+	"callable_summary": expand(os.path.join(OUTDIR, "{sample}.callable_summary.txt"), sample = samples),
+	"callable_intervals": expand(os.path.join(OUTDIR, "{sample}.callable.bed"), sample = samples),
+	"coverage": expand(os.path.join(OUTDIR, "{sample}.regions.bed.gz"), sample = samples)
+}
+report_file = os.path.join(OUTDIR, "report.html")
+
+## make intermediate targets
+callable_chunks = OrderedDict()
+for iid in samples:
+	callable_chunks[iid] = [
+		expand(os.path.join(OUTDIR, "per_chunk/{sample}/{region}.callable.bed"), sample = iid, region = chunks.keys()),
+		expand(os.path.join(OUTDIR, "per_chunk/{sample}/{region}.callable_summary.txt"), sample = iid, region = chunks.keys())
+	]
+
+rule all:
+	input: report_file
+
+rule create_report:
+	input:
+		targets.values(),
+		"report.yaml"
+	output:
+		report_file
+	shell:
+		r"""
+		Rscript -e \
+			"rmarkdown::render('wgs_qc_report.Rmd', clean=TRUE, output_file='{output}', output_format='html_document');"
+		"""
+
+rule windowed_coverage:
+	input:
+		bam = os.path.join(ALNROOT, "{sample}.bam"),
+		windows = os.path.expandvars(config["windows"])
+	output:
+		os.path.join(OUTDIR, "{sample}.regions.bed.gz")
+	shell:
+		r"""
+		mosdepth --by {input.windows} -n {OUTDIR}/{wildcards.sample} {input.bam}
+		"""
+
+rule aggregate_callable:
+	input:
+		bam = os.path.join(ALNROOT, "{sample}.bam"),
+		bed = lambda w: callable_chunks[w.sample][0],
+		txt = lambda w: callable_chunks[w.sample][1]
+	output:
+		bed = os.path.join(OUTDIR, "{sample}.callable.bed"),
+		txt = os.path.join(OUTDIR, "{sample}.callable_summary.txt")
+	wildcard_constraints:
+		sample = "[\w\-]+"
+	run:
+		# first concatenate all the bed files
+		shell("cat {input.bed} >{output.bed}")
+		# now read and aggregate all the summary files ...
+		summary = defaultdict(int)
+		key_order = None
+		for ff in callable_chunks[wildcards.sample][1]:
+			result = read_callable_summary(ff)
+			key_order = list(result.keys())
+			for key,val in result.items():
+				summary[key] += val
+		# ... and spit it back out
+		with open(os.path.join(OUTDIR, "{}.callable_summary.txt".format(wildcards.sample)), "w") as outfile:
+			print("state","nBases", sep = "\t", file = outfile)
+			for key in key_order:
+				print(key, summary[key], sep = "\t", file = outfile)
+
+rule callable_loci:
+	input:
+		bam = os.path.join(ALNROOT, "{sample}.bam"),
+		intervals = os.path.join(OUTDIR, "interval_lists/{region}.bed"),
+		ref = REF
+	output:
+		bed = temp( os.path.join(OUTDIR, "per_chunk/{sample}/{region}.callable.bed") ),
+		summary = temp( os.path.join(OUTDIR, "per_chunk/{sample}/{region}.callable_summary.txt") )
+	params:
+		min_mapping_qual = config["min_mapping_qual"],
+		min_base_qual = config["min_base_qual"],
+		min_depth = config["min_depth"],
+		max_depth = config["max_depth"],
+		threads = str(max(int(config["threads"]) - 1, 1)),
+		memory = str(8)
+	shell:
+		r"""
+		java -jar -Xmx{params.memory}g -XX:ParallelGCThreads={params.threads} {GATK} \
+			-T CallableLoci \
+			-R {input.ref} \
+			-I {input.bam} \
+			-L {input.intervals} \
+			--minMappingQuality {params.min_mapping_qual} \
+			--minBaseQuality {params.min_base_qual} \
+			--minDepth {params.min_depth} \
+			--maxDepth {params.max_depth} \
+			--out {output.bed} \
+			--summary {output.summary}
+		"""
+
+rule flagstats:
+	input:
+		bam = os.path.join(ALNROOT, "{sample}.bam")
+	output:
+		os.path.join(OUTDIR, "{sample}.flagstats")
+	shell:
+		r"""
+		samtools flagstat {input} >{output}
+		"""
+
+# NB: For no good reason, this tool will give uninterpretable outut unless REFERENCE_SEQUENCE is suppied.
+rule aln_summary_metrics:
+	input:
+		bam = os.path.join(ALNROOT, "{sample}.bam"),
+		ref = REF
+	output:
+		os.path.join(OUTDIR, "{sample}.AlignmentSummaryMetrics.txt")
+	params:
+		threads = str(max(int(config["threads"]) - 1, 1)),
+		memory = str(8)
+	shell:
+		r"""
+		java -jar -Xmx{params.memory}g -XX:ParallelGCThreads={params.threads} {PICARD} \
+			CollectAlignmentSummaryMetrics \
+			REFERENCE_SEQUENCE={input.ref} \
+			INPUT={input.bam} \
+			OUTPUT={output}
+		"""
+
+rule validate_sam:
+	input:
+		bam = os.path.join(ALNROOT, "{sample}.bam")
+	output:
+		os.path.join(OUTDIR, "{sample}.isvalid")
+	params:
+		threads = str(max(int(config["threads"]) - 1, 1)),
+		memory = str(8)
+	shell:
+		r"""
+		java -jar -Xmx{params.memory}g -XX:ParallelGCThreads={params.threads} {PICARD} \
+			ValidateSamFile \
+			INPUT={input.bam} \
+			OUTPUT={output} \
+			MODE=SUMMARY
+		"""
+
+rule make_interval_files:
+	input:
+		REGIONS
+	output:
+		os.path.join(OUTDIR, "interval_lists/{region}.bed")
+	run:
+		with open(os.path.join(OUTDIR, "interval_lists/{}.bed").format(wildcards.region), "w") as ivl_file:
+			for ivl in chunks[wildcards.region]:
+				print(*ivl, sep = "\t", file = ivl_file)
