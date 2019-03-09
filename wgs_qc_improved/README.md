@@ -1,4 +1,4 @@
-# Alignment of paired-end whole-genome sequence reads to *P. falciparum*
+# QC of paired-end whole-genome sequence reads to *Plasmodium* spp
 
 ## Dependencies
 
@@ -6,57 +6,63 @@ These are available on Longleaf by default or via `module load ...`, unless othe
 
 * `java >= 1.8`
 * `samtools >= 1.5`
-* `bwa >= 0.7.17`
-* `cutadapt >= 1.15`
 * `python >= 3.5`
+* `bedtools >= 2.26`
+* `pybedtools` (Python package, requires command-line `bedtools` above)
 * `snakemake >= 4.0` (available on Bioconda or Longleaf)
-* `samblaster` (available on Bioconda)
 * `Picard >= 2.0`
+* `GATK == 3.8` (`CallableLoci` not available in GATK4 yet)
+* `mosdepth >= 0.2` (available on [Github](https://github.com/brentp/mosdepth))
+* `R >= 3.5` (with `knitr`, `ggplot2` and `tidyverse`; all available on Longleaf)
 
-The `Picard` tools don't actually have to be on your `$PATH`; the path to a recent version of the jar file (on Longleaf) is hard-coded in the Snakemake script.
+The `Picard` and `GATK` tools don't actually have to be on your `$PATH`; the path to a recent version of the jar file (on Longleaf) is hard-coded in the Snakemake script.
 
 ## Overview
 
+We assume that WGS reads have been aligned with the `wgs_pe_improved` pipeline from this repository. As with that pipeline, this one is controlled by a **runs** file and assumes a 1-to-1 relationship between samples and BAM files. Operations are parallelized over samples and (optionally) genomic regions.
+
 Steps:
 
-0. Organize raw fastq files under a single project directory
-1. Trim adapter sequences
-2. Align to genome
-3. Merge lane-level bam files
-4. Index merged bam file
+0. Make **interval files** defining genomic regions to be processed together
+1. Do bare-minimum validation of BAM files
+2. Generate alignment summary metrics with `Picard`
+3. Summarize flag counts in BAM files with `samtools flagstats`
+4. Use `CallableLoci` to segment BAM files by coverage and mapping quality
+5. Summarize coverage in windows with `mosdepth`
+6. Create report with `R/knitr`.
 
-Step 0 is assumed to be done already (but see suggestions later for how to do it.) Remaining steps are organized into a Snakemake script `align_wgs.snake`. Steps 1 and 2 run independently (ie. is parallelizable) over each lane-sample combination; step 3 runs independently on each sample. Options modifiable by the user at runtime can be supplied either at the command line (as `--config key=value`) or (better) in a YAML-formatted configuration file (as `--configfile config.yaml`) like the one below.
+Options modifiable by the user at runtime can be supplied either at the command line (as `--config key=value`) or (better) in a YAML-formatted configuration file (as `--configfile config.yaml`) like the one below.
 
 ```
+# config file for QC pipeline
 reference: /proj/ideel/julianog/users/apm/genomes/pf_3d7/pf_3d7.fa
-
-adapters: /nas02/apps/trimmomatic-0.36/Trimmomatic-0.36/adapters/TruSeq3-PE.fa
-min_trimmed_length: 30
-
-logs: jobs
-tmpdir: .tmp
-readbuffer: 1000000
-threads: 6
-memory: 12
-
-runs: pf3k_asia_run_map.txt
-aligned: aln
-fastq: fastq
+runs: run_map.txt
+regions: $PF/all_chroms.named.bed
+aligned: $SCRATCH/cambodia/aln/merged
+min_depth: 4
+max_depth: 250
+min_base_qual: 20
+min_mapping_qual: 10
+threads: 4
+memory: 8
+outdir: $SCRATCH/cambodia/qc
+windows: $PF/all_chroms.w5kb.bed
 ```
 
 Options are as follows. Note that all file paths will be interpreted by Snakemake relative to the working directory at runtime; it may be useful to specify absolute paths to files that live outside the project directory (eg. reference genome.)
 
 * **reference**: path to reference genome fasta file, which must be indexed for use with `bwa`.
-* **adapters**: fasta file of adapter sequences used for read trimming.
-* **min_trimmed_length**: omit trimmed reads (and their mates) shorter than this from alignment.
-* **logs**: directory where Slurm job scheduler will write log files
-* **tmpdir**: directory used by Picard for temporary files when merging and sorting bams. Should be in scratch space. Should not point to the system-wide `/tmp` directory, which tends to fill up easily.
-* **readbuffer**: maximum number of reads to hold in RAM at a time when merging and sorting bams; about a million is usually reasonable. If too large relative to the memory allotted to these steps, Java will run out of heap space and/or spend most of its time on garbage collection.
-* **threads**: number of threads to use per `bwa` job; also will be used as the limit for the number of Java garbage-collection threads (which is unlimited by default, sometimes leading to problems on the cluster.)
-* **memory**: memory limit for `bwa` jobs in gigabytes. Scales linearly with number of threads.
-* **runs**: text file with tab-separated lines containing sample ID in first column and run ID (ERR* or SRR* for ENA or SRA data, respectively, or some unique lane identifier for locally-generated data) in second column.
-* **aligned**: directory where bam files will go.
-* **fastq**: directory where fastq files (or symlinks to same) are expected to live.
+* **runs**: text file with tab-separated lines containing sample ID in first column and run ID (ERR* or SRR* for ENA or SRA data, respectively, or some unique lane identifier for locally-generated data) in second column. Should be same file given to `wgs_pe_improved` pipeline.
+* **regions**: BED file of genomic regions over which to do the QC, most importantly the `CallableLoci` step. Intervals with the same `name` (column 4) are grouped together and parallelization happens over those groups. If no `name` specified, all regions assumed to be part of one big group.
+* **windows**: BED file of genomic regions defining windows over which coverage profiles are generated with `mosdepth`; non-overlapping 5 kb windows is usually a good compromise between resolution and information-overload in figures
+* **aligned**: directory where BAM files live
+* **min_depth**: minimum read depth to consider a site callable (inclusive)
+* **max_depth**: maximum read depth to consider a site callable (inclusive)
+* **min_base_qual**: minimum base quality to consider a site callable (inclusive)
+* **min_mapping_qual**: minimum root-mean-squared mapping quality (`MAPQ`) to consider a site callable (inclusive)
+* **outdir**: directory where all the output goes
+* **threads**: number of threads to use per job; also will be used as the limit for the number of Java garbage-collection threads (which is unlimited by default, sometimes leading to problems on the cluster.)
+* **memory**: memory limit per job in gigabytes.
 
 I show briefly how to invoke the pipeline and enable dispatch of jobs on the cluster by Slurm, then move on to more detailed discussion of each step.
 
@@ -64,7 +70,7 @@ I show briefly how to invoke the pipeline and enable dispatch of jobs on the clu
 The pipeline is invoked with Snakemake via a command like the following. Independent steps can be run in parallel via the Slurm job scheduler. The helper script `launch.py` handles this, and passes stuff like number of threads and memory requirements on to Slurm.
 
 ```
-snakemake --snakefile align_wgs.snake \
+snakemake --snakefile qc_wgs.snake \
 	--configfile config.yaml \
 	--directory {project_dir} \
 	--printshellcmds \
@@ -78,65 +84,46 @@ The option `--directory` sets the working directory for Snakemake; all relative 
 
 A few extra options are supplied to improve stability on the cluster. First, the `--latency-wait` option adds a delay (measured in seconds) between the end of job execution and the check for output files, to allow the cluster's file system to catch up with itself. I have found 30 seconds to be reasonable. The value of `-j` controls how many jobs are dispatched at once. The number actually running at one time will be controlled by Slurm, but it is poor form to flood the scheduler with thousands of jobs that will pend for hours/days so I usually only let Snakemake send ~1000 a time.
 
-The call to Snakemake is best wrapped in a shell script (example provided in `launch_wgs.sh`) for submission with Slurm.
+The call to Snakemake is best wrapped in a shell script for submission with Slurm.
 
-## Step 0: Organizing read files
-Briefly, raw reads are expected to be paried-end with forward and reverse reads in separate gzipped files (ie. NOT interleaved). Each sample gets its own directory, and in that directory live all the "runs" (independent units of data generation, probably lanes) for that sample. Forward read files should be named `_1.fastq.gz` and reverse reads `_2.fastq.gz`. So fastq file paths (relative to project directory) will be `{fastq_dir}/{sample_id}/{run_id}_1.fastq.gz` and `{fastq_dir}/{sample_id}/{run_id}_2.fastq.gz`, respectively. This implies that run IDs must be unique within samples; it's probably a good idea that they be globally unique to avoid potential mischief. This is certainly true for ENA and SRA data, but depending on barcoding and sample labelling it may not always be true for files generated by UNC HTSF.
+## Step 1: validation of BAM files
 
-The **runs** file is a tab-separated text file tuples of (sample ID, run ID) with one line per run. In the case that a sample has multiple runs, it should appear on multiple lines. For example:
+Just call `Picard ValidateSamFile` on each BAM. The result is one file per sample called `{outdir}/{sample}.isvalid`. Assuming no problems, the contents of that file should be a single line `No errors found`.
 
-```
-H34	ERR019142
-H34	ERR019173
-H36	ERR019143
-H36	ERR019166
-```
+## Step 2: validation of BAM files
 
-Read files (or symlinks) for the above example would look like:
+Generate some summaries over paired-end alignments with `Picard CollectAlignmentSummaryMetrics`. For more details, see the []`Picard` documentation](https://broadinstitute.github.io/picard/command-line-overview.html). Briefly these include proportion of reads mapped at all; proportion of reads mapping in proper pairs; and mismatch rates. Results go in `{outdir}/{sample}.AlignmentSummaryMetrics.txt`.
 
-```
-fastq/H34/ERR019142_1.fastq.gz
-fastq/H34/ERR019142_2.fastq.gz
-fastq/H34/ERR019173_1.fastq.gz
-fastq/H34/ERR019173_2.fastq.gz
-fastq/H36/ERR019143_1.fastq.gz
-fastq/H36/ERR019143_2.fastq.gz
-fastq/H36/ERR019166_1.fastq.gz
-fastq/H36/ERR019166_2.fastq.gz
-```
+## Step 3: BAM flag summary
 
-See companion script `rename_htsf_fastq.py` for help generating a *runs* file and compatible symlinks from pre-existing HTSF data.
+Just call `samtools flagstat` on each BAM. Results overlap with what's provided by `Picard CollectAlignmentSummaryMetrics`, but we include them for completeness. Results go in `{outdir}/{sample}.flagstats`.
 
-## Step 1: Trim adapters
-There are many tools for adapter trimming; `cutadapt` ([documentation here](http://cutadapt.readthedocs.io/en/stable/guide.html)) has good performance and will write paired-end reads to stdout so it can be used on a stream. This is a big advantage. The call to `cutadapt` looks for a standard set of adapters in the fasta-formatted **adapters** file (can use the Illumina TruSeq ones provided with `Trimmomatic`) at the 3' end of both forward and reverse reads. If I understand the standard Illumina chemistry correctly, this should be sufficient for vanilla WGS (see [Illumina's explanation here](https://support.illumina.com/bulletins/2016/12/what-sequences-do-i-use-for-adapter-trimming.html)). Default parameters for error tolerance etc. are used otherwise.
+## Step 4: define "callable" sites
 
-Reads shorter than **min_trimmed_length** will be thrown out, along with their mates.
+Use the old `GATK CallableLoci` tool to segment the genome base-by-base into these bins (straight from GATK documentation):
 
-Diagnostic output is written to `{fastq_dir}/{sample}/{run_id}_trimming.log`.
+* `REF_N`: reference genome had an `N`
+* `PASS`: base quality, mapping quality and read depth all within defined bounds
+* `NO_COVERAGE`: no reads at all, even bad ones
+* `LOW_COVERAGE`: read depth below defined bounds after applying filters on base quality and mapping quality
+* `EXCESSIVE_COVERAGE`: read depth above defined bounds after applying filters on base quality and mapping quality
+* `POOR_MAPPING_QUALITY`: too many reads failing base or mapping quality filters
 
-Note that I do NOT perform additional trimming based on quality scores. The benefits and harms of doing this are subject to long-running debates among bioinformatics people. My sense is that, for WGS on not-ancient Illumina instruments at least, it's better to be conservative and keep as much data as possible (to increase specificity of alignments) and let variant-callers sort things out downstream.
+If QC is parallelized over genomic regions, this step is performed separately for each chunk and then aggregated at the sample level.
 
-## Step 2: Alignment to reference genome
-Output from `cutadapt` is piped directly to `bwa mem`. The reference genome fasta at **reference** is assumed to be already indexed. Speed is linearly proportional to number of threads; most nodes on Longleaf have 16 or less. In practice 6-12 threads gives a reasonable balance of performance and time spent waiting for resources on the cluster. Memory usage (specified with **memory**) is linearly proportional to the number of threads used, the vast majority of which is spent on the in-memory index. That index consumes about twice as many gigabytes as there are gigabases in the genome -- so for *Plasmodium* and other small genomes, 8 Gb is probably sufficient even for a large number of threads.
+Two files are produced per sample: a summary of the total number of bases in each bin (`{outdir}/{sample}.callable_summary.txt`) and a BED file in with each interval labelled as above (`{outdir}/{sample}.callable.bed`). **This latter file is the key to defining the "genomic denominator", ie. the proportion of the genome in each sample that is accessible for variant-calling.**
 
-A read group tag is generated from the sample ID and run ID as shown below:
-```
-@RG	LB:{sample_id}	ID:{run_id}	SM:{sample_id}	PL:illumina"
-```
-Since runs are processed independently, there will be only one read group per bam file at time of alignment, named like `{aln_dir}/lane_bams/{sample_id}/{run_id}.aligned.bam`.
+## Step 5: coverage summary in windows
 
-I use additional options `-Y` (use soft-clipping for supplementary alignments; preserves whole read sequence in bam file) and `-K100000000` (read fixed-size chunk of data regardless of number of threads, so results are reproducible.)
+Use `mosdepth` for (really) quick but dirty estimation of read depth in windows defined in file passed as **windows** in the configuration file. This summary is used to make coverage plots in the final report. For any downstream work it is probably better to produce more thoughtful summaries. Result goes in `{outdir}/{sample}.regions.bed.gz`.
 
-Alignments are piped through `samblaster` for duplicate-marking and fixing of mate tags, then to `samtools` for conversion to name-sorted bam.
+## Step 6: create report
 
-> **NOTE**: Run-level bams are temporary. Once the merged bam file for a sample has been created successfully, Snakemake will automatically delete corresponding run-level bams. Peak disk usage can still be >5x the size of the raw fastq files in the worst case, if all jobs are moving at about the same speed, but final disk usage is kept to a minimum.
+The RMarkddown template `wgs_qc_report.Rmd` takes the output from previous steps and makes a nice report that includes:
 
-## Step 3: Merge bam files
-The `Picard MergeSamFiles` utility is used to merge run-level bam files into sample-level files. I use this tool because I have found it slightly less annoying than equivalent utilities in `samtools`, and it will sort the final bam file at the same time as merging. Depending on the value of **readbuffer** and the total number of reads for a sample, this step can generate many temporary files (written to **tmpdir**.) Some extra options are provided to the Java call to ensure that the jobs are not too thread-hungry. Memory limit is hard-coded at a value that has worked well in the past on Longleaf.
+* list of BAM files failing validation, if any
+* table of alignment summary metrics
+* plot of coverage quantiles across samples
+* per-sample plots of coverage profiles, plus summaries per chromosome (for nuclear chromosomes only)
 
-Merged bam files (one per sample) go in `{aln_dir}/merged/{sample}.bam`.
-
-## Step 4: Index merged bam files
-Uses `Picard BuildBamIndex` rather than `samtools index` because it offers finer control of memory usage to avoid causing problems on the cluster.
-
-Index files (one per sample) go in `{aln_dir}/merged/{sample}.bam.bai`.
+This step may be a little rickety as it needs the various players in the `tidyverse` to get along nicely.
