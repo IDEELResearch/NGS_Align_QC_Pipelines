@@ -52,8 +52,11 @@ rule all:
 #####################################
 rule render_rmarkdown:
 	output: 'report.txt'
-	shell: 'Rscript -e "rmarkdown::render("SumSTATsandQC/WGS_coverage.Rmd", clean=TRUE, output_format="html_document")" ; echo "Report finished" > {output}'
-	shell: 'rmarkdown::render("SumSTATsandQC/WGS_coverage.Rmd", clean=TRUE, output_format="html_document"); echo "Report finished" > {output}'
+	shell:
+		"""r
+		Rscript -e 'rmarkdown::render("WGS_coverage.Rmd", clean=TRUE)' ; \
+			echo "Report finished" > {output}
+		"""
 # IMPORTANT -- this step requires you to downloada  WGS_Coverage_template.Rmd file and put your appropriate paths in it
 # You should also add in your project details!! (highly recommended)
 # It can live wherever you want/wherever your project is... i.e. maybe the report lives in your analysis directory and not your scratch space
@@ -88,13 +91,13 @@ rule CallableLoci_By_SAMPLE:
 		-o {output.bedfile}'
 
 rule summary_stats:
-	input: 'aln/{sample}.recal.realn.bam'
+	input: 'aln/{sample}.realn.bam'
 	output: 'SumSTATsandQC/FlagStats/{sample}.samtools.flagstats'
 	shell: 'samtools flagstat {input} > {output}'
 # Provides alignment information
 
 rule AlignSummaryMetrics:
-	input: 'aln/{sample}.recal.realn.bam'
+	input: 'aln/{sample}.realn.bam'
 	output: 'SumSTATsandQC/AlignSummary/{sample}.AlignSummary.Metrics'
 	shell: '{JAVA} -jar {PICARD} CollectAlignmentSummaryMetrics \
           R={REF} \
