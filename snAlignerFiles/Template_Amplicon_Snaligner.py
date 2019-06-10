@@ -34,60 +34,18 @@ JAVA = '/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.171-8.b10.el7_5.x86_64/jre/bin/jav
 rule all:
 #    input: expand('symlinks/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz', samp=SAMPS)
 #    input: expand('symlinks/{samp}_Stitch.tab.txt', samp=SAMPS)
-#	input: expand('aln/{samp}.sorted.bam.bai', samp=SAMPS)
-	input: expand('aln/{samp}.realn.bam', samp=SAMPS)
-###############################################################################
-
-
-
-
-############################
-######## Alignment #########
-############################
-
-rule realn_indels:
-	input: bam = 'aln/{samp}.sorted.bam', chrs = 'intervals/cytb.intervals', targets = 'aln/{samp}.realigner.intervals',
-	output: 'aln/{samp}.realn.bam'
-	shell: '{JAVA} -jar {GATK} -T IndelRealigner \
-		-R {ref2} -I {input.bam} \
-		-L {input.chrs} -targetIntervals {input.targets} \
-		-o {output}'
-		# all_chrs.intervals includes just chrs and mito -- it is similar to a bed file for GATK Caller
-		# -fixMisencodedQuals must be added for SRA data
-		# Interval file from CMP direcotry
-
-rule find_indels:
-	input: bam = 'aln/{samp}.sorted.bam', index = 'aln/{samp}.sorted.bam.bai', chrs = 'intervals/cytb.intervals'
-	output: 'aln/{samp}.realigner.intervals'
-	shell: '{JAVA} -jar {GATK} -T RealignerTargetCreator \
-		-R {ref2} -I {input.bam} \
-		-L {input.chrs} -o {output}'
-		# all_chrs.intervals includes just  chrs and mito
+#	input: expand('aln/{samp}.bam.bai', samp=SAMPS)
 
 rule index_bam:
-	input: 'aln/{samp}.sorted.bam'
-	output: 'aln/{samp}.sorted.bam.bai'
-	shell: '{JAVA} -jar {PICARD} BuildBamIndex INPUT={input} OUTPUT={output} TMP_DIR={TMPDIR}'
-
-
-rule sort_bam:
-	input: 'aln/{samp}.bam'
-	output: 'aln/{samp}.sorted.bam'
-	shell: 'java -jar {PICARD} SortSam \
-		I={input} O={output} \
-		SO=coordinate TMP_DIR={TMPDIR}'
-
-# rule matefix:
-# 	input: 'aln/{samp}.bam'
-# 	output: 'aln/{samp}.matefixed.bam'
-# 	shell: '{JAVA} -jar {PICARD} FixMateInformation INPUT={input} OUTPUT={output} TMP_DIR={TMPDIR}'
-
-
+	input: 'aln/{samp}.bam.bai'
+	output: 'aln/{samp}.bam.bai'
+	shell: 'samtools index -b {input} > {output}'
 rule stitchedfastq_to_bam:
 	input: 'symlinks/{samp}.extendedFrags.fastq.gz'
 	output: 'aln/{samp}.bam'
-	shell: 'bowtie2 -x {ref} -U {input} -S {output} \
-	    --rg-id "bowtie" --rg "PL:illumina\\tLB:{wildcards.samp}\\tSM:{wildcards.samp[0]}{wildcards.samp[1]}{wildcards.samp[3]}{wildcards.samp[4]}{wildcards.samp[5]}{wildcards.samp[6]}{wildcards.samp[7]}{wildcards.samp[8]}" '
+	shell: 'bowtie2 -x {ref} -U {input}  \
+	    --rg-id "bowtie" --rg "PL:illumina\\tLB:{wildcards.samp}\\tSM:{wildcards.samp[0]}{wildcards.samp[1]}{wildcards.samp[3]}{wildcards.samp[4]}{wildcards.samp[5]}{wildcards.samp[6]}{wildcards.samp[7]}{wildcards.samp[8]}" \
+		| samtools sort - | samtools view -Sb - > {output}'
 
 rule stitch_R1_R2_fastqs:
 	input: R1 = 'symlinks/{samp}_R1.PAIREDtrimmomatictrimmed.fastq.gz',
