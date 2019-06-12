@@ -12,15 +12,15 @@
 ###############################################################################
 
 ####### Working Directory and Project Specifics ############
-workdir: '/pine/o/y/onyen/somefolder'
-WRKDIR = '/pine/o/y/onyen/somefolder' # same as above, this is for string concatenation
+workdir: '/pine/scr/o/y/onyen/somefolder'
+WRKDIR = '/pine/scr/o/y/onyen/somefolder' # same as above, this is for string concatenation
 readWD = '/proj/ideel/YOURDIRECTORY/'
 SAMPLES, = glob_wildcards(readWD + 'symlinks/{samp}_R1.fastq.gz')
 MERGEDSAMPS, = glob_wildcards(WRKDIR + 'aln/{ms}.merged.bam')
 MTDT = '/your/directory/metadata.txt'
 
 ################   REFERENCE    ##############
-ref = '/your/reffasta'
+REF = '/your/reffasta'
 
 ######## Tools to Call #########
 PICARD = '/proj/ideel/apps/linuxbrew/Cellar/picard-tools/2.18.4/bin/picard'
@@ -78,8 +78,8 @@ rule fastq2bam:
 			2>{output.trimlog} | \
 		bwa mem -t {params.threads} -YK100000000 \
 			-H '@PG\tID:cutadapt\tCL:cutadapt -a file:{input.adapters} -A file:{input.adapters} -m {params.minlength} --interleaved {input.read1} {input.read2} 2>{output.trimlog}' \
-			-R '{params.rg}' -p \
-			{input.ref} - | \
+			-R '\tSM:{wildcards.samp[0]}{wildcards.samp[1]}{wildcards.samp[2]}{wildcards.samp[3]}{wildcards.samp[4]}' -p \
+			{REF} - | \
 		samblaster --addMateTags | \
 		samtools view -bhS - >{output.aligned}
 		"""
