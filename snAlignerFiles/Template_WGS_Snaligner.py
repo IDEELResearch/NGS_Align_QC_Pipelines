@@ -2,7 +2,7 @@
 # Purpose:  SnakeMake File to take FASTQs and make BAMs
 # Authors: Nick Brazeau (inspired by Christian Parobek)
 # NOTES: Updated on June 10, 2019 to incorporate Andrew Morgan's
-# BWA set seed and read chunking (for reproducibility) and use of samblaster 
+# BWA set seed and read chunking (for reproducibility) and use of samblaster
 #Given: FASTQ
 #Return: BAM
 #Remarks: Note, you will have to change the paths and project specifics as well as the tools paths (depending on user) for each project/each new directory
@@ -50,7 +50,10 @@ rule index_merged:
 	output: 'aln/{merge}.merged.bam.bai'
 	shell: '{JAVA} -jar {PICARD} BuildBamIndex INPUT={input} OUTPUT={output} TMP_DIR={TMPDIR}'
 
-"The merge was completed using the custom Rscript BamMergeCommander -- good idea to check the CmdlineMerge table to confirm merge was appropriate" > {output}'
+rule merge_matefixed:
+	input: 'aln/CmdlineMerge_cmppnasaln.sh'
+	output: 'merge.log.file'
+	shell: 'bash {input}; echo "The merge was completed using the custom Rscript BamMergeCommander -- good idea to check the CmdlineMerge table to confirm merge was appropriate" > {output}'
 
 rule make_merge_commandLine:
 	input:  metadata='/yourproject/metadata.txt',
@@ -60,7 +63,6 @@ rule make_merge_commandLine:
 	shell: 'BamMergeCommander --input {params.dedupbams} --metadata {input.metadata} --outdir {params.outdir} --output {output}'
 # This is a tool by Nick Brazeau. It is in the ideel binary. Must have this in your path to run this
 # Merge steps are only needed if you have multiple runs
-# Note, you BAMs must be named .matefixed.bam for this tool to work (it greps on this)
 
 rule fastq2bam:
 	input: read1 = 'symlinks/{samp}_R1.fastq.gz',
