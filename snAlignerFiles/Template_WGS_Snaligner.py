@@ -20,12 +20,10 @@ MERGEDSAMPS, = glob_wildcards(WRKDIR + 'aln/{ms}.merged.bam')
 MTDT = '/your/directory/metadata.txt'
 
 ################   REFERENCE    ##############
-REF = '/your/reffasta'
+ref = '/your/reffasta'
 
 ######## Tools to Call #########
 PICARD = '/proj/ideel/apps/linuxbrew/Cellar/picard-tools/2.18.4/bin/picard'
-TRIMMOMATIC = '/proj/ideel/apps/brew/share/java/trimmomatic-0.36.jar'
-JAVA = '/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.171-8.b10.el7_5.x86_64/jre/bin/java'
 TMPDIR = '/pine/scr/o/y/onyen/somefolder'
 
 ###########################
@@ -34,7 +32,7 @@ TMPDIR = '/pine/scr/o/y/onyen/somefolder'
 #Rule all checks to see if file is the same and follows directions up to specified point
 rule all:
 #	input: expand('aln/{samp}.matefixed.bam', samp = SAMPLES)
-#       input: 'aln/CmdlineMerge_cmppnasaln.sh'
+#   input: 'aln/CmdlineMerge_cmppnasaln.sh'
 #	input: 'merge.log.file'                                                 # Run to here and then check file
 #	input: expand('aln/{merge}.bam.bai', merge = MERGEDSAMPS)
 
@@ -69,7 +67,7 @@ rule fastq2bam:
 		   read2 = 'symlinks/{samp}_R2.fastq.gz',
 		   adapters = '/nas/longleaf/apps/trimmomatic/0.36/Trimmomatic-0.36/adapters/TruSeq3-PE.fa',
 	params: minlength = '50',
-	output: aligned = 'aln/{samp}.matefixed.bam', trimlog = 'logs/adaptertrimlog.txt',
+	output: aligned = 'aln/{samp}.matefixed.bam', trimlog = 'logs/{samp}.adaptertrimlog.txt',
 	shell:
 		r"""
 		cutadapt --interleaved \
