@@ -81,5 +81,6 @@ rule fastq2bam:
 			-R '\tSM:{wildcards.samp[0]}{wildcards.samp[1]}{wildcards.samp[2]}{wildcards.samp[3]}{wildcards.samp[4]}' -p \
 			{REF} - | \
 		samblaster --addMateTags | \
+		samtools sort - | \
 		samtools view -bhS - >{output.aligned}
 		"""
