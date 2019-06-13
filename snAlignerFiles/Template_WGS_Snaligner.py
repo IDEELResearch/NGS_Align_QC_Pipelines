@@ -1,6 +1,6 @@
 ###############################################################################
 # Purpose:  SnakeMake File to take FASTQs and make BAMs
-# Authors: Nick Brazeau (inspired by Christian Parobek)
+# Authors: Nick Brazeau & Andrew Morgan (inspired by Christian Parobek)
 # NOTES: Updated on June 10, 2019 to incorporate Andrew Morgan's
 # BWA set seed and read chunking (for reproducibility) and use of samblaster
 #Given: FASTQ
