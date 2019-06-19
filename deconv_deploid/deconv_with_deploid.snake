@@ -1,0 +1,415 @@
+# /usr/bin/env python3
+"""
+deconv_with_deploid.snake
+Perform COI estimation and haplotype phasing with McVean lab's DEploid method.
+"""
+
+import os
+import sys
+import re
+import numpy as np
+from collections import OrderedDict, defaultdict
+
+OUTDIR = os.path.expandvars(config["outdir"])
+SAMPLES = os.path.expandvars(config["samples"])
+COVERAGE = os.path.expandvars(config["coverage"])
+CLUSTERS = os.path.expandvars(config["clusters"])
+EXCLUDE = os.path.expandvars(config["exclude"])
+VCF = os.path.expandvars(config["vcf"])
+MIN_VQSLOD = float(config["min_vqslod"])
+MIN_PROP = float(config["min_prop"])
+MIN_READS = int(config["min_reads"])
+MIN_PLMAF = float(config["min_plmaf"])
+IBD_MODE = (config["method"].lower() == "ibd")
+SIGMA = float(config["sigma"]) if "sigma" in config else 5.0
+DEPLOID = os.path.expandvars("$HOME/src/DEploid")
+
+def read_sample_list(infile):
+	samples = []
+	with open(infile, "r") as ff:
+		for line in ff:
+			line = line.strip()
+			if line.startswith("#"):
+				continue
+			pieces = line.split()
+			samples.append( pieces[0] )
+	return list(set(samples))
+
+def read_keyvalue_pairs(infile):
+	covg_table = {}
+	with open(infile, "r") as ff:
+		for line in ff:
+			line = line.strip()
+			if line.startswith("#"):
+				continue
+			pieces = line.split()
+			iid, covg = pieces[:2]
+			covg_table[iid] = covg
+	return covg_table
+
+def summarize_props(infile, min_prop = 0.0000001):
+	props = np.loadtxt(infile)
+	prop_mean = np.average(props, 0)
+	K = np.sum(prop_mean > min_prop)
+	return prop_mean, K
+
+sample_list = read_sample_list(SAMPLES)
+coverage = read_keyvalue_pairs(COVERAGE)
+clusters = { iid: cluster for iid,cluster in read_keyvalue_pairs(CLUSTERS).items() if iid in sample_list }
+by_cluster = defaultdict(list)
+for iid, cluster in clusters.items():
+	if iid in sample_list:
+		by_cluster[cluster].append(iid)
+
+persample_targets = {
+	cluster: [ os.path.join(OUTDIR, "out/{}/{}.nopanel.classic.hap").format(cluster, iid) for iid in by_cluster[cluster] ] for cluster in by_cluster.keys()
+}
+persample_vcfs = {
+	cluster: [ os.path.join(OUTDIR, "out/{}/{}.nopanel.classic.vcf.gz").format(cluster, iid) for iid in by_cluster[cluster] ] for cluster in by_cluster.keys()
+}
+persample_plots = {
+	cluster: [ os.path.join(OUTDIR, "out/{}/{}.nopanel.interpretDEploidFigure.1.pdf").format(cluster, iid) for iid in by_cluster[cluster] ] for cluster in by_cluster.keys()
+}
+coi_and_props = \
+	expand(os.path.join(OUTDIR, "out/{cluster}/final_K.noibd.txt"), cluster = by_cluster.keys()) + \
+	expand(os.path.join(OUTDIR, "out/{cluster}/final_props.noibd.txt"), cluster = by_cluster.keys())
+
+# if IBD_MODE:
+# 	coi_and_props.extend([
+# 		os.path.join(OUTDIR, "final_K.ibd.txt"),
+# 		os.path.join(OUTDIR, "final_props.ibd.txt")
+# 	])
+print(coi_and_props)
+final_targets = list(coi_and_props)
+final_targets.extend( expand(os.path.join(OUTDIR, "out/{cluster}/ref_panel.vcf.gz"), cluster = by_cluster.keys()) )
+final_targets.extend( expand(os.path.join(OUTDIR, "out/{cluster}/all_phased_haps.vcf.gz"), cluster = by_cluster.keys()) )
+final_targets.extend( expand(os.path.join(OUTDIR, "out/{cluster}/all_phased_haps.vcf.gz"), cluster = by_cluster.keys()) )
+print(persample_plots)
+
+# print("\n".join(persample_vcfs))
+# print("\n".join(final_targets), file = sys.stderr)
+# for k,v in persample_targets.items():
+# 	print("{} ---".format(k), file = sys.stderr)
+# 	print("\t{}".format( "\n\t".join(v) ), file = sys.stderr)
+
+rule all:
+	input:
+		final_targets,
+		persample_plots.values()
+		#os.path.join(OUTDIR, "final_dic.txt"),
+		#os.path.join(OUTDIR, "ref_panel.txt"),
+		#os.path.join(OUTDIR, "ref_panel.vcf.gz"),
+
+rule make_ref_panel_vcf:
+	input:
+		vcf = os.path.join(OUTDIR, "out/{cluster}/candidate_phased_haps.vcf.gz"),
+		clonal_list = os.path.join(OUTDIR, "out/{cluster}/clonal.txt")
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/ref_panel.vcf.gz")
+	shell:
+		r"""
+		bcftools view --samples-file {input.clonal_list} -Oz {input.vcf} >{output} && \
+		bcftools index --tbi {output}
+		"""
+
+rule merge_all_haps:
+	input:
+		lambda w: [ os.path.join(OUTDIR, "out/{}/{}.nopanel.scrubbed.vcf.gz".format(w.cluster,iid)) for iid in by_cluster[w.cluster] ]
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/all_phased_haps.vcf.gz")
+	shell:
+		r"""
+		bcftools merge {input} | \
+		bcftools +fill-tags -Oz >{output} && \
+		bcftools index --tbi {output}
+		"""
+
+rule merge_phased_haps:
+	input:
+		lambda w: [ os.path.join(OUTDIR, "out/{}/{}.nopanel.phased_haps.vcf.gz".format(w.cluster,iid)) for iid in by_cluster[w.cluster] ]
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/candidate_phased_haps.vcf.gz")
+	shell:
+		r"""
+		bcftools merge {input} | \
+		bcftools +fill-tags -Oz >{output} && \
+		bcftools index --tbi {output}
+		"""
+
+rule extract_all_haps:
+	input:
+		#vcf = os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.vcf.gz"),
+		props = os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.prop")
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.scrubbed.vcf.gz")
+	run:
+		infile = os.path.join(OUTDIR, "out/{}/{}.nopanel.classic.prop".format(wildcards.cluster, wildcards.sample))
+		with open(infile, "rU") as props_file:
+			props = None
+			for line in props_file:
+				props = [ float(_) for _ in line.strip().split() ]
+			keeps = []
+			print(wildcards.sample, props)
+			for ii, p in enumerate(props):
+				if p >= MIN_PROP:
+					keeps.append(str(10+ii))
+			print(wildcards.sample, keeps)
+		cmd = r"""
+		zcat {} | \
+		cut -f 1-9,{} | \
+		sed 's/DEploid call\: /DEploid_call=/' | \
+		bcftools view -Oz >{} && \
+		bcftools index --tbi {}
+		"""
+		cmd = cmd.format(os.path.join(OUTDIR, "out/{wildcards.cluster}/{wildcards.sample}.nopanel.classic.vcf.gz"), ",".join(keeps), "{output}", "{output}")
+		shell(cmd)
+
+rule extract_phased_haps:
+	input:
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.vcf.gz")
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.phased_haps.vcf.gz")
+	shell:
+		r"""
+		zcat {input} | \
+		cut -f1-10 | \
+		sed 's/{wildcards.sample}.1/{wildcards.sample}/' | \
+		sed 's/DEploid call\: /DEploid_call=/' | \
+		bcftools view -Oz >{output} && \
+		bcftools index --tbi {output}
+		"""
+
+rule make_ref_panel:
+	input:
+		kfile = os.path.join(OUTDIR, "out/{cluster}/final_K.noibd.txt"),
+		vcfs = lambda w: persample_targets[w.cluster]
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/ref_panel.txt"),
+		os.path.join(OUTDIR, "out/{cluster}/clonal.txt")
+	run:
+		## first read back estimated strain numbers (K)
+		clonal = []
+		with open(os.path.join(OUTDIR, "out/{}/final_K.noibd.txt".format(wildcards.cluster)), "r") as kfile:
+			for line in kfile:
+				if line.startswith("#"):
+					continue
+				iid, K = line.strip().split()
+				if iid in by_cluster[ wildcards.cluster ]:
+					if int(K) == 1:
+						clonal.append(iid)
+				else:
+					continue
+
+		print("\n".join(clonal), file = sys.stderr)
+		clonal_by_cluster = defaultdict(list)
+		for iid in clonal:
+			clonal_by_cluster[ clusters[iid] ].append(iid)
+
+		## create a reference panel for each cluster, using only the clonal ones (K == 1)
+		for cluster,iids in clonal_by_cluster.items():
+
+			## write list of clonal samples
+			with open(os.path.join(OUTDIR, "out/{}/clonal.txt".format(cluster)), "w") as clonal_list:
+				for iid in iids:
+					print(iid, file = clonal_list)
+
+			## now extract haplotypes by cluster
+			sites = []
+			haps = list( [] for _ in iids )
+			first_sample = True
+			for ii,iid in enumerate(iids):
+				with open(os.path.join(OUTDIR, "out/{}/{}.nopanel.classic.hap".format(clusters[iid], iid)), "r") as hapfile:
+					_ = next(hapfile) # skip header line
+					for line in hapfile:
+						chrom, pos, allele, _ = line.strip().split(maxsplit = 3)
+						haps[ii].append(allele)
+						if first_sample:
+							sites.append( (chrom,pos) )
+					first_sample = False
+
+			## now write reference haplotypes
+			chrom, pos = list(zip(*sites))
+			haps = zip(*haps)
+			with open(os.path.join(OUTDIR, "out/{}/ref_panel.txt".format(cluster)), "w") as refpanel:
+				print("CHROM","POS",*iids, sep = "\t", file = refpanel)
+				for ii,hh in enumerate(haps):
+					print(chrom[ii],pos[ii],*hh, sep = "\t", file = refpanel)
+
+# rule extract_dic:
+# 	input:
+# 		persample_targets
+# 	output:
+# 		os.path.join(OUTDIR, "final_dic.txt")
+# 	run:
+# 		with open(os.path.join(OUTDIR, "final_dic.txt"), "w") as outfile:
+# 			for iid,cluster in clusters.items():
+# 				with open(os.path.join(OUTDIR, "out/{}/{}.nopanel.log".format(cluster, iid)), "r") as logfile:
+# 					for line in logfile:
+# 						m = re.match(r"\s*DIC_by_Dtheta\: (\-*[0-9]\.*[0-9]*)", line.strip())
+# 						if m:
+# 							label, value = line.strip().split(": ")
+# 							print(iid, float(value), sep = "\t", file = outfile)
+# 							break
+
+rule extract_coi:
+	input:
+		lambda w: persample_targets[w.cluster]
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/final_K.noibd.txt"),
+		os.path.join(OUTDIR, "out/{cluster}/final_props.noibd.txt")
+	run:
+		k_noibd = open(os.path.join(OUTDIR, "out/{}/final_K.noibd.txt".format(wildcards.cluster)), "w")
+		props_noibd = open(os.path.join(OUTDIR, "out/{}/final_props.noibd.txt".format(wildcards.cluster)), "w")
+		#if IBD_MODE:
+		#	k_ibd = open(os.path.join(OUTDIR, "final_K.ibd.txt"), "w")
+		#	props_ibd = open(os.path.join(OUTDIR, "final_props.ibd.txt"), "w")
+
+		for iid in by_cluster[wildcards.cluster]:
+			cluster = wildcards.cluster
+			prop_mean, K = summarize_props( os.path.join(OUTDIR, "out/{}/{}.nopanel.classic.prop".format(cluster, iid)), MIN_PROP )
+			print(iid, K, sep = "\t", file = k_noibd)
+			print(iid, *prop_mean, sep = "\t", file = props_noibd)
+			#if IBD_MODE:
+			#	prop_mean, K = summarize_props( os.path.join(OUTDIR, "out/{}/{}.nopanel.ibd.prop".format(cluster, iid)), MIN_PROP )
+			#	print(iid, K, sep = "\t", file = k_ibd)
+			#	print(iid, *prop_mean, sep = "\t", file = props_ibd)
+
+		k_noibd.close()
+		props_noibd.close()
+		#if IBD_MODE:
+		#	k_ibd.close()
+		#	props_ibd.close()
+
+rule make_plots:
+	input:
+		vcf = os.path.join(OUTDIR, "sample_vcfs/{cluster}/{sample}.vcf.gz"),
+		idx = os.path.join(OUTDIR, "sample_vcfs/{cluster}/{sample}.vcf.gz.tbi"),
+		freq = lambda w: os.path.join(OUTDIR, "{}.plaf".format( clusters[w.sample] )),
+		deploid = os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.prop")
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.interpretDEploidFigure.1.pdf"),
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.altVsRefAndWSAFvsPLAF.pdf"),
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.PotentialOutliers.txt")
+	params:
+		prefix = lambda w: os.path.join(OUTDIR, "out", w.cluster, w.sample + ".nopanel")
+	shell:
+		r"""
+		{DEPLOID}/utilities/interpretDEploid.r \
+			-vcf {input.vcf} \
+			-plaf {input.freq} \
+			-o {params.prefix} \
+			-dEprefix {params.prefix} \
+			-pdf && \
+		{DEPLOID}/utilities/dataExplore.r \
+			-vcf {input.vcf} \
+ 			-plaf {input.freq} \
+			-o {params.prefix}. \
+			-pdf
+		"""
+
+# rule scrub_deploid_vcf:
+# 	input:
+# 		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.vcf.gz")
+# 	output:
+# 		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.scrubbed.vcf.gz")
+# 	shell:
+# 		r"""
+# 		bcftools view {input} | \
+# 		grep -v "Proportion of strain" | \
+# 		grep -v "DEploid call" | \
+# 		bcftools view -Oz >{output} && \
+# 		bcftools index --tbi {output}
+# 		"""
+
+rule est_coi:
+	input:
+		vcf = os.path.join(OUTDIR, "sample_vcfs/{cluster}/{sample}.vcf.gz"),
+		idx = os.path.join(OUTDIR, "sample_vcfs/{cluster}/{sample}.vcf.gz.tbi"),
+		freq = lambda w: os.path.join(OUTDIR, "{}.plaf".format( clusters[w.sample] ))
+	output:
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.prop"),
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.hap"),
+		os.path.join(OUTDIR, "out/{cluster}/{sample}.nopanel.classic.vcf.gz")
+	params:
+		prefix = lambda w: os.path.join(OUTDIR, "out", w.cluster, w.sample + ".nopanel"),
+		covg = lambda w: coverage[w.sample],
+		vqslod = MIN_VQSLOD,
+		sigma = SIGMA,
+		method = "-ibd" if IBD_MODE else ""
+	shell:
+		r"""
+		dEploid \
+			-vcf {input.vcf} \
+			-plaf {input.freq} \
+			-noPanel \
+			-seed 1 \
+			-o {params.prefix} \
+			-c {params.covg} \
+			-sigma {params.sigma} \
+			-vqslod {params.vqslod} \
+			-vcfOut -z
+		"""
+
+rule make_indiv_vcfs:
+	input:
+		vcf = os.path.join(OUTDIR, "input.vcf.gz"),
+		freq = lambda w: os.path.join(OUTDIR, "{}.plaf".format( clusters[w.sample] ))
+	output:
+		# NB: don't make these temporary; it makes re-running hard
+		vcf = os.path.join(OUTDIR, "sample_vcfs/{cluster}/{sample}.vcf.gz"),
+		idx = os.path.join(OUTDIR, "sample_vcfs/{cluster}/{sample}.vcf.gz.tbi")
+	shell:
+		r"""
+		bcftools view -s {wildcards.sample} {input.vcf} | \
+		bcftools annotate -x ^INFO/VQSLOD -Oz >{output.vcf} && \
+		bcftools index --tbi {output.vcf}
+		"""
+
+rule est_allele_freq:
+	input:
+		samples = os.path.join(OUTDIR, "{cluster}.list"),
+		vcf = os.path.join(OUTDIR, "input.vcf.gz")
+	output:
+		os.path.join(OUTDIR, "{cluster}.plaf")
+	shell:
+		# NB: although dEploid itself does not care about column names in this file (as long as there is a header),
+		#	the R-based utilities for making diagnostic plots require columns named as below.
+		r"""
+		echo "CHROM	POS	PLAF" >{output} &&
+		bcftools view --samples-file {input.samples} {input.vcf} | \
+		vcfdo wsaf | \
+		bcftools query -f '%CHROM\t%POS\t%INFO/PLAF\n' >>{output}
+		"""
+
+rule filter_and_scrub_vcf:
+	input:
+		excluder = EXCLUDE,
+		samples = SAMPLES,
+		vcf = VCF
+	output:
+		vcf = os.path.join(OUTDIR, "input.vcf.gz"),
+		idx = os.path.join(OUTDIR, "input.vcf.gz.tbi")
+	params:
+		min_plmaf = MIN_PLMAF,
+		min_reads = MIN_READS
+	shell:
+		r"""
+		bedtools intersect -header -v -a {input.vcf} -b {input.excluder} | \
+		bcftools view --trim-alt-alleles -f PASS --samples-file {input.samples} | \
+		bcftools +fill-tags | \
+		bcftools view -m2 -M2 | \
+		vcfdo wsaf | \
+		bcftools view -i 'UNW > {params.min_reads} && PLMAF > {params.min_plmaf}' -Oz >{output.vcf} && \
+		bcftools index --tbi {output.vcf}
+		"""
+
+rule make_cluster_lists:
+	input:
+		CLUSTERS
+	output:
+		expand(os.path.join(OUTDIR, "{cluster}.list"), cluster = by_cluster.keys())
+	run:
+		for cluster in by_cluster.keys():
+			with open(os.path.join(OUTDIR, "{}.list").format(cluster), "w") as cluster_file:
+				for iid in by_cluster[cluster]:
+					print(iid, file = cluster_file)
