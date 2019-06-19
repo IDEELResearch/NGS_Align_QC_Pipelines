@@ -1,0 +1,77 @@
+#! /usr/bin/env python3
+"""
+run_vqsr.snake
+Implement GATK VQSR approach to variant filtering. Snakemake probably overkill but nice because it is essentially self-documenting.
+"""
+
+import os
+import sys
+
+REF = os.path.expandvars(config["reference"])
+INFILE = os.path.expandvars(config["raw_vcf"])
+TARGETS = os.path.expandvars(config["targets"])
+OUTFILE = "filtered.vcf.gz"
+
+rule all:
+	input: OUTFILE
+
+rule apply_snp_model:
+	input:
+		vcf = INFILE,
+		ref = REF,
+		targets = TARGETS,
+		snps_tranches_file = "snps.tranches",
+		snps_recal_file = "snps.recal"
+	output:
+		OUTFILE
+	params:
+		memory = config["recal_memory"],
+		snps_filter_level = config["snps_filter_level"]
+	shell:
+		r"""
+		gatk --java-options "-Xmx{params.memory}g -Xms{params.memory}g" \
+			ApplyVQSR \
+			-V {input.vcf} \
+			-O {output} \
+			-R {input.ref} \
+			--intervals {input.targets} \
+			--truth-sensitivity-filter-level {params.snps_filter_level} \
+			--tranches-file {input.snps_tranches_file} \
+			--recal-file {input.snps_recal_file} \
+			-mode SNP
+		"""
+
+rule build_snp_model:
+	input:
+		vcf = INFILE,
+		targets = TARGETS,
+		snps_vcf_TP = os.path.expandvars(config["snps_vcf_TP"]),
+		snps_vcf_TPFP = os.path.expandvars(config["snps_vcf_TPFP"])
+	output:
+		snps_recal = "snps.recal",
+		snps_tranches_file = "snps.tranches",
+		snps_plotter_file = "snps.plots.R"
+	params:
+		memory = config["recal_memory"],
+		snps_tranches = " -tranche ".join(str(_) for _ in config["snps_tranches"]),
+		snps_input_annotations = " -an ".join(config["snps_input_annotations"]),
+		snps_ncomponents = config["snps_ncomponents"],
+		snps_prior_TP = config["snps_prior_TP"],
+		snps_prior_TPFP = config["snps_prior_TPFP"]
+	shell:
+		r"""
+		gatk --java-options "-Xmx{params.memory}g -Xms{params.memory}g" \
+			VariantRecalibrator \
+			-V {input.vcf} \
+			-O {output.snps_recal} \
+			--intervals {input.targets} \
+			--tranches-file {output.snps_tranches_file} \
+			--rscript-file {output.snps_plotter_file} \
+			--trust-all-polymorphic \
+			-tranche {params.snps_tranches} \
+			-an {params.snps_input_annotations} \
+			-mode SNP \
+			--max-gaussians {params.snps_ncomponents} \
+			-resource TP,known=true,training=true,truth=true,prior={params.snps_prior_TP}:{input.snps_vcf_TP} \
+			-resource TPFP,known=true,training=true,truth=false,prior={params.snps_prior_TPFP}:{input.snps_vcf_TPFP}
+		"""
